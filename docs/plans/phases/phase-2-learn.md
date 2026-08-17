@@ -13,7 +13,7 @@ related:
 
 # Phase 2 — "Learn" Vertical Slice
 
-**Status:** Planned
+**Status:** Completed
 
 ## Overview
 
@@ -29,7 +29,7 @@ Implements the complete learn flow: fetch a spec (file or URI), parse OpenAPI 3.
 - **Affected Symbols:** `ApiModel`, `CommandGroup`, `Command`, `Param`, `ParamLocation`, `HttpMethod`, `BodySpec`, `ModelVersion`
 - **Description:** Define the persisted `ApiModel` (`name`, `base_url`, `version`, `command_groups`) with serde derives. `Command` carries `name`, `summary`, `method`, `path` template, `path_params`, `query_params`, and an optional `request_body` (`BodySpec { required, content_type, schema_json }`). `Param` stores both the original `name` (from the spec) and the kebab-cased `cli_name` used on the command line. `BodySpec.schema_json` stores the raw schema for help display only (no validation in v0).
 - **Acceptance Criteria:**
-  - [ ] All entities serialize/deserialize losslessly via serde_json.
+  - [x] All entities serialize/deserialize losslessly via serde_json.
 
 ### 2. Implement command and parameter naming rules
 
@@ -39,10 +39,10 @@ Implements the complete learn flow: fetch a spec (file or URI), parse OpenAPI 3.
 - **Affected Symbols:** `command_name(operation_id, method, path)`, `cli_name(param_name)`, `disambiguate(names)`
 - **Description:** Pure functions: kebab-case conversion of `operationId`; fallback `method-path-segments` joined by `-` and skipping `{path vars}`; kebab-casing of parameter names for the CLI; collision suffixing (`-2`, `-3`, …) within a group.
 - **Acceptance Criteria:**
-  - [ ] `operationId "getPetById"` → `get-pet-by-id`.
-  - [ ] `GET /pets/{petId}` (no operationId) → `get-pets`.
-  - [ ] Param `petStatus` → CLI `pet-status`.
-  - [ ] Two identical fallback names in one group → second becomes `...-2`.
+  - [x] `operationId "getPetById"` → `get-pet-by-id`.
+  - [x] `GET /pets/{petId}` (no operationId) → `get-pets`.
+  - [x] Param `petStatus` → CLI `pet-status`.
+  - [x] Two identical fallback names in one group → second becomes `...-2`.
 
 ### 3. Define domain ports
 
@@ -52,7 +52,7 @@ Implements the complete learn flow: fetch a spec (file or URI), parse OpenAPI 3.
 - **Affected Symbols:** `ApiStore`, `SpecLoader`, `OpenApiParser`
 - **Description:** `ApiStore::load_by_name` / `save`; `SpecLoader::load(source) -> bytes`; `OpenApiParser::parse(bytes) -> ApiModel`. The domain error enum covers not-found, invalid-stored-model, invalid-spec, I/O, and network.
 - **Acceptance Criteria:**
-  - [ ] Ports compile as traits with no references to infrastructure types.
+  - [x] Ports compile as traits with no references to infrastructure types.
 
 ### 4. Implement the OpenAPI 3.0 parser adapter
 
@@ -62,9 +62,9 @@ Implements the complete learn flow: fetch a spec (file or URI), parse OpenAPI 3.
 - **Affected Symbols:** `OpenApi30Spec`, `PathItem`, `Operation`, `Parameter`, `RequestBody`, `Parser`
 - **Description:** Serde structs for the OpenAPI 3.0.x subset (`openapi`, `info`, `servers`, `paths`, `tags`, operation `parameters`, `requestBody`, `responses`). `parse` maps spec → `ApiModel`: groups by tag (`default` for untagged), applies naming rules, merges path-item-level and operation-level parameters, and sets the base URL from `servers[0].url`. Rejects non-3.0 specs with a clear error.
 - **Acceptance Criteria:**
-  - [ ] Fixture 3.0 spec maps to the expected `ApiModel` (groups, command names, params, base URL) in unit tests.
-  - [ ] 3.1 / 2.0 spec → clear "unsupported version" error.
-  - [ ] Malformed JSON → clear parse error.
+  - [x] Fixture 3.0 spec maps to the expected `ApiModel` (groups, command names, params, base URL) in unit tests.
+  - [x] 3.1 / 2.0 spec → clear "unsupported version" error.
+  - [x] Malformed JSON → clear parse error.
 
 ### 5. Implement the JSON file store adapter
 
@@ -74,9 +74,9 @@ Implements the complete learn flow: fetch a spec (file or URI), parse OpenAPI 3.
 - **Affected Symbols:** `JsonFileStore`
 - **Description:** Store root = `$CLINING_DIR` or `~/.clining/`; one file per API (`<name>.json`). Atomic write (temp file + rename). A missing file returns `NotFound`; a present-but-unparseable file returns the distinct `InvalidStoredModel` error (with file path + parse reason) — never masked as not-found.
 - **Acceptance Criteria:**
-  - [ ] Save-then-load roundtrips an `ApiModel`; JSON is canonical.
-  - [ ] Missing file → `NotFound`; corrupt file → `InvalidStoredModel` (never `NotFound`).
-  - [ ] Writes are atomic (no partial file left on failure).
+  - [x] Save-then-load roundtrips an `ApiModel`; JSON is canonical.
+  - [x] Missing file → `NotFound`; corrupt file → `InvalidStoredModel` (never `NotFound`).
+  - [x] Writes are atomic (no partial file left on failure).
 
 ### 6. Implement the source loader adapter
 
@@ -86,8 +86,8 @@ Implements the complete learn flow: fetch a spec (file or URI), parse OpenAPI 3.
 - **Affected Symbols:** `SourceLoader`
 - **Description:** Loads bytes from a local file path or an `http(s)://` URI (via reqwest blocking). Descriptive errors for missing files and failed fetches.
 - **Acceptance Criteria:**
-  - [ ] File path → file bytes; `https://` URI → response bytes.
-  - [ ] Nonexistent path → descriptive error.
+  - [x] File path → file bytes; `https://` URI → response bytes.
+  - [x] Nonexistent path → descriptive error.
 
 ### 7. Implement the LearnApiService use case
 
@@ -97,7 +97,7 @@ Implements the complete learn flow: fetch a spec (file or URI), parse OpenAPI 3.
 - **Affected Symbols:** `LearnApiService::learn(name, source, base_url_override)`
 - **Description:** Orchestrates `SpecLoader` → `OpenApiParser` → `ApiStore.save`. Validates that the name is non-empty and filename-safe; `base_url_override` replaces the server URL. Re-install overwrites the existing model.
 - **Acceptance Criteria:**
-  - [ ] Unit tests with fake ports: install persists the model; invalid spec propagates; base-URL override lands in the stored model.
+  - [x] Unit tests with fake ports: install persists the model; invalid spec propagates; base-URL override lands in the stored model.
 
 ### 8. Wire `clining install` in the CLI
 
@@ -108,10 +108,10 @@ Implements the complete learn flow: fetch a spec (file or URI), parse OpenAPI 3.
 - **Affected Symbols:** `InstallArgs`, `build_static_command()`, `run()`
 - **Description:** Top-level clap command with the static `install <name> <spec-source> [--base-url]` subcommand. `main.rs` composes the real adapters into `LearnApiService`. Success prints `Installed <name> (N commands, M groups)`; errors to stderr with exit 1.
 - **Acceptance Criteria:**
-  - [ ] `clining install pets /path/spec.json` creates `~/.clining/pets.json`.
-  - [ ] `clining install pets --base-url http://localhost:8080 ...` stores the overridden base URL.
-  - [ ] `clining install pets https://.../openapi.json` fetches over the network.
-  - [ ] Invalid spec → stderr error, exit 1, nothing persisted.
+  - [x] `clining install pets /path/spec.json` creates `~/.clining/pets.json`.
+  - [x] `clining install pets --base-url http://localhost:8080 ...` stores the overridden base URL.
+  - [x] `clining install pets https://.../openapi.json` fetches over the network.
+  - [x] Invalid spec → stderr error, exit 1, nothing persisted.
 
 ## Verification Plan
 
@@ -121,7 +121,7 @@ Implements the complete learn flow: fetch a spec (file or URI), parse OpenAPI 3.
 
 ## Phase Definition of Done
 
-- [ ] `clining install` persists a correct model from file or URI, honoring `--base-url`.
-- [ ] Naming/grouping rules verified by unit tests.
-- [ ] `NotFound` vs `InvalidStoredModel` distinguished.
-- [ ] Clippy-clean, formatted, all tests pass.
+- [x] `clining install` persists a correct model from file or URI, honoring `--base-url`.
+- [x] Naming/grouping rules verified by unit tests.
+- [x] `NotFound` vs `InvalidStoredModel` distinguished.
+- [x] Clippy-clean, formatted, all tests pass.

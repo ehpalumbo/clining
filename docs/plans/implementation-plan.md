@@ -28,7 +28,7 @@ One commit per phase, plus an initial documentation commit containing this plan.
 | Phase | Scope | Status | Plan |
 | --- | --- | --- | --- |
 | 1 | Toolchain & onion scaffolding — lint-clean crate skeleton | **Completed** | [phase-1-scaffolding.md](phases/phase-1-scaffolding.md) |
-| 2 | "Learn" slice — model, OpenAPI parser, store, source loader, `install` | Planned | [phase-2-learn.md](phases/phase-2-learn.md) |
+| 2 | "Learn" slice — model, OpenAPI parser, store, source loader, `install` | **Completed** | [phase-2-learn.md](phases/phase-2-learn.md) |
 | 3 | "Invoke" slice — request builder, HTTP adapter, dynamic CLI, streaming | Planned | [phase-3-invoke.md](phases/phase-3-invoke.md) |
 | 4 | Discovery polish & hardening — help, error UX, E2E tests, README/Makefile | Planned | [phase-4-polish.md](phases/phase-4-polish.md) |
 
