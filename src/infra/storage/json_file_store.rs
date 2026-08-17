@@ -1,0 +1,1 @@
+//! JSON file store adapter implementing the `ApiStore` port.

@@ -13,7 +13,7 @@ related:
 
 # Phase 1 — Toolchain & Onion Scaffolding
 
-**Status:** Planned
+**Status:** Completed
 
 ## Overview
 
@@ -27,7 +27,7 @@ This phase establishes the project skeleton and toolchain so every later phase l
 - **Affected Files:** N/A (system toolchain).
 - **Description:** Install via rustup (stable channel) on Linux.
 - **Acceptance Criteria:**
-  - [ ] `cargo --version`, `rustc --version`, `rustup --version` all succeed.
+  - [x] `cargo --version`, `rustc --version`, `rustup --version` all succeed.
 
 ### 2. Initialize the crate and add dependencies
 
@@ -36,8 +36,8 @@ This phase establishes the project skeleton and toolchain so every later phase l
   - `Cargo.toml`
 - **Description:** `cargo init --name clining --bin`; set `edition = "2024"`. Add `clap` (derive), `serde` + `serde_json`, `anyhow`, `thiserror`, and `reqwest` (blocking feature), pinned to current versions.
 - **Acceptance Criteria:**
-  - [ ] `cargo build` succeeds with zero warnings.
-  - [ ] `cargo clippy --all-targets -- -D warnings` is clean.
+  - [x] `cargo build` succeeds with zero warnings.
+  - [x] `cargo clippy --all-targets -- -D warnings` is clean.
 
 ### 3. Create the onion module skeleton
 
@@ -50,8 +50,8 @@ This phase establishes the project skeleton and toolchain so every later phase l
 - **Affected Symbols:** placeholder `main()`
 - **Description:** Create the empty module tree per the [Architecture Overview](../../architecture/overview.md). Placeholder `main.rs` prints a one-line usage banner. Add `#![deny(unsafe_code)]`.
 - **Acceptance Criteria:**
-  - [ ] `cargo build` and `cargo test` pass; clippy clean with `-D warnings`.
-  - [ ] `cargo run` prints the usage banner and exits 0.
+  - [x] `cargo build` and `cargo test` pass; clippy clean with `-D warnings`.
+  - [x] `cargo run` prints the usage banner and exits 0.
 
 ## Verification Plan
 
@@ -62,6 +62,6 @@ This phase establishes the project skeleton and toolchain so every later phase l
 
 ## Phase Definition of Done
 
-- [ ] Toolchain installed and pinned.
-- [ ] Crate compiles, tests pass, lint-clean.
-- [ ] Onion module layout present and documented.
+- [x] Toolchain installed and pinned.
+- [x] Crate compiles, tests pass, lint-clean.
+- [x] Onion module layout present and documented.
