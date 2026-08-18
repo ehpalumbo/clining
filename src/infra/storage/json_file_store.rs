@@ -23,12 +23,12 @@ impl JsonFileStore {
 }
 
 impl ApiStore for JsonFileStore {
-    #[allow(dead_code)]
     fn load_by_name(&self, name: &str) -> Result<ApiModel, DomainError> {
         let path = self.path_for(name);
         if !path.exists() {
             return Err(DomainError::NotFound {
                 name: name.to_owned(),
+                path: self.root.display().to_string(),
             });
         }
         let bytes = fs::read(&path).map_err(|e| DomainError::Io {

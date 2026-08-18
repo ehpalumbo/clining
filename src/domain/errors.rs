@@ -6,8 +6,8 @@ use thiserror::Error;
 /// Errors produced by the domain ports and use cases.
 #[derive(Debug, Error)]
 pub enum DomainError {
-    #[error("no API installed under the name '{name}'")]
-    NotFound { name: String },
+    #[error("no API installed under the name '{name}' (looked in '{path}')")]
+    NotFound { name: String, path: String },
 
     #[error("stored model for '{name}' at '{path}' is invalid: {reason}")]
     InvalidStoredModel {
@@ -22,11 +22,9 @@ pub enum DomainError {
     #[error("invalid name '{name}': {reason}")]
     InvalidName { name: String, reason: String },
 
-    #[allow(dead_code)]
     #[error("parameter error: {message}")]
     Parameter { message: String },
 
-    #[allow(dead_code)]
     #[error("body error: {message}")]
     Body { message: String },
 

@@ -5,7 +5,7 @@ use crate::domain::model::{ApiModel, validate_name};
 use crate::domain::ports::{ApiStore, OpenApiParser, SpecLoader};
 
 /// Orchestrates fetching, parsing, and persisting an API model.
-pub struct LearnApiService<L, P, S>
+pub struct LearnApiService<'a, L, P, S>
 where
     L: SpecLoader,
     P: OpenApiParser,
@@ -13,16 +13,16 @@ where
 {
     loader: L,
     parser: P,
-    store: S,
+    store: &'a S,
 }
 
-impl<L, P, S> LearnApiService<L, P, S>
+impl<'a, L, P, S> LearnApiService<'a, L, P, S>
 where
     L: SpecLoader,
     P: OpenApiParser,
     S: ApiStore,
 {
-    pub fn new(loader: L, parser: P, store: S) -> Self {
+    pub fn new(loader: L, parser: P, store: &'a S) -> Self {
         Self {
             loader,
             parser,
@@ -102,6 +102,7 @@ mod tests {
         fn load_by_name(&self, name: &str) -> Result<ApiModel, DomainError> {
             Err(DomainError::NotFound {
                 name: name.to_owned(),
+                path: "fake-root".to_owned(),
             })
         }
 
@@ -119,7 +120,7 @@ mod tests {
     fn install_persists_model_with_override() {
         let store = FakeStore::new();
         let saved = Rc::clone(&store.saved);
-        let svc = LearnApiService::new(loader(b"{}".to_vec()), FakeParser, store);
+        let svc = LearnApiService::new(loader(b"{}".to_vec()), FakeParser, &store);
         let model = svc
             .learn("pets", "spec.json", Some("http://override"))
             .unwrap();
@@ -134,7 +135,7 @@ mod tests {
     fn invalid_spec_propagates_and_nothing_is_saved() {
         let store = FakeStore::new();
         let saved = Rc::clone(&store.saved);
-        let svc = LearnApiService::new(loader(vec![]), FakeParser, store);
+        let svc = LearnApiService::new(loader(vec![]), FakeParser, &store);
         let err = svc.learn("pets", "spec.json", None).unwrap_err();
         assert!(matches!(err, DomainError::InvalidSpec { .. }));
         assert!(saved.borrow().is_empty());
@@ -144,7 +145,7 @@ mod tests {
     fn invalid_name_is_rejected() {
         let store = FakeStore::new();
         let saved = Rc::clone(&store.saved);
-        let svc = LearnApiService::new(loader(b"{}".to_vec()), FakeParser, store);
+        let svc = LearnApiService::new(loader(b"{}".to_vec()), FakeParser, &store);
         let err = svc.learn("a/b", "spec.json", None).unwrap_err();
         assert!(matches!(err, DomainError::InvalidName { .. }));
         assert!(saved.borrow().is_empty());

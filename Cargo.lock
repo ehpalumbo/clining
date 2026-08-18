@@ -193,6 +193,7 @@ dependencies = [
  "anyhow",
  "clap",
  "heck",
+ "percent-encoding",
  "reqwest",
  "serde",
  "serde_json",

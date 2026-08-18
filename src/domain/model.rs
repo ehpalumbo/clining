@@ -68,6 +68,23 @@ pub enum HttpMethod {
     Trace,
 }
 
+/// An outbound HTTP request produced by the request builder.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HttpRequest {
+    pub method: HttpMethod,
+    pub url: String,
+    pub headers: Vec<(String, String)>,
+    pub body: Option<Vec<u8>>,
+}
+
+/// The response to an outbound HTTP request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HttpResponse {
+    pub status: u16,
+    pub headers: Vec<(String, String)>,
+    pub body: Vec<u8>,
+}
+
 impl HttpMethod {
     pub fn as_str(&self) -> &'static str {
         match self {
