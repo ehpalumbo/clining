@@ -2,20 +2,22 @@
 
 use std::collections::{HashMap, HashSet};
 
+use heck::ToKebabCase;
+
 use crate::domain::model::HttpMethod;
 
 /// Command name for an operation: kebab-cased `operationId` when present,
 /// otherwise a method + path-segments fallback.
 pub fn command_name(operation_id: Option<&str>, method: HttpMethod, path: &str) -> String {
     match operation_id {
-        Some(id) if !id.trim().is_empty() => kebab_case(id),
+        Some(id) if !id.trim().is_empty() => id.to_kebab_case(),
         _ => fallback_name(method, path),
     }
 }
 
 /// CLI name for a parameter: kebab-cased from the spec name.
 pub fn cli_name(param_name: &str) -> String {
-    kebab_case(param_name)
+    param_name.to_kebab_case()
 }
 
 /// Disambiguates duplicate names within a group with numeric suffixes (`-2`, `-3`, …).
@@ -48,33 +50,7 @@ fn fallback_name(method: HttpMethod, path: &str) -> String {
             parts.push(segment);
         }
     }
-    kebab_case(&parts.join("-"))
-}
-
-/// Converts CamelCase / snake_case / kebab input to kebab-case.
-fn kebab_case(input: &str) -> String {
-    let chars: Vec<char> = input.chars().collect();
-    let mut out = String::new();
-    let mut prev: Option<char> = None;
-    for (i, c) in chars.iter().copied().enumerate() {
-        if matches!(c, '_' | '-' | ' ' | '.') {
-            if prev.is_some() {
-                out.push('-');
-                prev = None;
-            }
-            continue;
-        }
-        if c.is_ascii_uppercase() {
-            let after_boundary = prev.is_some_and(|p| p.is_lowercase() || p.is_ascii_digit());
-            let before_lower = chars.get(i + 1).is_some_and(|n| n.is_lowercase());
-            if prev.is_some() && (after_boundary || before_lower) {
-                out.push('-');
-            }
-        }
-        out.push(c.to_ascii_lowercase());
-        prev = Some(c);
-    }
-    out.trim_end_matches('-').to_owned()
+    parts.join("-").to_kebab_case()
 }
 
 #[cfg(test)]
@@ -114,6 +90,13 @@ mod tests {
         assert_eq!(cli_name("petStatus"), "pet-status");
         assert_eq!(cli_name("already-kebab"), "already-kebab");
         assert_eq!(cli_name("XRequestID"), "x-request-id");
+    }
+
+    #[test]
+    fn separators_and_digits_are_preserved() {
+        assert_eq!(cli_name("get.pet"), "get-pet");
+        assert_eq!(cli_name("get2Pets"), "get2-pets");
+        assert_eq!(cli_name("get2pets"), "get2pets");
     }
 
     #[test]
