@@ -9,7 +9,7 @@ use clap::{Arg, ArgAction, Args, Command, CommandFactory, Parser, Subcommand};
 use crate::application::invoke_command::InvokeCommandService;
 use crate::application::learn_api::LearnApiService;
 use crate::domain::errors::DomainError;
-use crate::domain::model::ApiModel;
+use crate::domain::model::{ApiInvocationRequest, ApiModel, CommandGroup};
 use crate::domain::ports::{ApiStore, HttpInvoker, OpenApiParser, SpecLoader};
 
 #[derive(Debug, Parser)]
@@ -216,14 +216,14 @@ where
         let group = match model.command_groups.iter().find(|g| g.name == group_name) {
             Some(group) => group,
             None => {
-                eprintln!("error: unknown command group '{group_name}'");
+                eprintln!("error: {}", unknown_group(&group_name, &model));
                 return ExitCode::FAILURE;
             }
         };
         let command = match group.commands.iter().find(|c| c.name == command_name) {
             Some(command) => command,
             None => {
-                eprintln!("error: unknown command '{command_name}' in group '{group_name}'");
+                eprintln!("error: {}", unknown_command(&command_name, group));
                 return ExitCode::FAILURE;
             }
         };
@@ -238,19 +238,15 @@ where
         }
         // Read the request body from stdin, if any.
         let body = read_stdin_body();
-        // Invoke the command using the service, passing all collected information
+        // Invoke the command using the service, passing the resolved request.
         eprintln!(
-            "Invoking {group_name}/{command_name} with params: {params:?}, body length: {}",
+            "Invoking {group_name}/{command_name} with params: {:?}, body length: {}",
+            params,
             body.as_ref().map_or(0, Vec::len)
         );
-        let service = InvokeCommandService::new(&self.store, &self.invoker);
-        let response = match service.invoke(
-            api_name,
-            &group_name,
-            &command_name,
-            &params,
-            body.as_deref(),
-        ) {
+        let invocation = ApiInvocationRequest::new(model.base_url.clone(), command, params, body);
+        let service = InvokeCommandService::new(&self.invoker);
+        let response = match service.invoke(&invocation) {
             Ok(response) => response,
             Err(err) => {
                 eprintln!("error: {err}");
@@ -302,6 +298,33 @@ where
             model.name, commands, groups
         );
         Ok(())
+    }
+}
+
+/// Returns a `DomainError::Parameter` for an unknown command group, listing valid groups.
+fn unknown_group(group_name: &str, model: &ApiModel) -> DomainError {
+    let names: Vec<&str> = model
+        .command_groups
+        .iter()
+        .map(|g| g.name.as_str())
+        .collect();
+    DomainError::Parameter {
+        message: format!(
+            "unknown command group '{group_name}'; valid groups: {}",
+            names.join(", ")
+        ),
+    }
+}
+
+/// Returns a `DomainError::Parameter` for an unknown command, listing valid commands.
+fn unknown_command(command_name: &str, group: &CommandGroup) -> DomainError {
+    let names: Vec<&str> = group.commands.iter().map(|c| c.name.as_str()).collect();
+    DomainError::Parameter {
+        message: format!(
+            "unknown command '{command_name}' in group '{}'; valid commands: {}",
+            group.name,
+            names.join(", ")
+        ),
     }
 }
 

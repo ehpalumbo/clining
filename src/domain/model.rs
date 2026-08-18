@@ -1,5 +1,7 @@
 //! Persisted API model entities (Phase 2).
 
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::domain::errors::DomainError;
@@ -83,6 +85,31 @@ pub struct HttpResponse {
     pub status: u16,
     pub headers: Vec<(String, String)>,
     pub body: Vec<u8>,
+}
+
+/// A fully-resolved command invocation: the selected command plus input data.
+#[derive(Debug, PartialEq, Eq)]
+pub struct ApiInvocationRequest<'m> {
+    pub base_url: String,
+    pub command: &'m Command,
+    pub params: HashMap<String, Vec<String>>,
+    pub body: Option<Vec<u8>>,
+}
+
+impl<'m> ApiInvocationRequest<'m> {
+    pub fn new(
+        base_url: String,
+        command: &'m Command,
+        params: HashMap<String, Vec<String>>,
+        body: Option<Vec<u8>>,
+    ) -> Self {
+        Self {
+            base_url,
+            command,
+            params,
+            body,
+        }
+    }
 }
 
 impl HttpMethod {
