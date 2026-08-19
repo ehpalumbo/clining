@@ -1,10 +1,11 @@
-//! clap CLI: static `install` subcommand plus dynamic per-API command tree (Phases 2-4).
+//! clap CLI: a single builder-API command tree — a static `install` subcommand
+//! plus a per-API subcommand tree added once the installed model is loaded.
 
 use std::collections::HashMap;
 use std::io::{IsTerminal, Read, Write};
 use std::process::ExitCode;
 
-use clap::{Arg, ArgAction, Args, Command, Parser, Subcommand};
+use clap::{Arg, ArgAction, Command};
 
 use crate::application::describe::{BodyHelp, CommandHelp, DescribeService, GroupHelp, ParamHelp};
 use crate::application::invoke_operation::InvokeOperationService;
@@ -13,44 +14,63 @@ use crate::domain::errors::DomainError;
 use crate::domain::model::{ApiInvocationRequest, ApiModel, ApiOperationGroup};
 use crate::domain::ports::{ApiStore, HttpInvoker, OpenApiParser, SpecLoader};
 
-#[derive(Debug, Parser)]
-#[command(
-    name = "clining",
-    version,
-    about = "Expose OpenAPI-documented HTTP APIs as local CLI commands"
-)]
-pub struct Cli {
-    #[command(subcommand)]
-    pub command: CliCommand,
+/// Builds the full CLI command tree: the `install` subcommand plus, when a
+/// model is provided, the installed API as a nested subcommand tree. Without a
+/// model, a placeholder `<api>` entry keeps the invocation shape visible in
+/// `clining --help`.
+pub fn build_cli_command(model: Option<&ApiModel>) -> Command {
+    let top = Command::new("clining")
+        .version(env!("CARGO_PKG_VERSION"))
+        .about("Expose OpenAPI-documented HTTP APIs as local CLI commands")
+        .disable_help_subcommand(true)
+        .subcommand_required(true)
+        .subcommand(install_command());
+    match model {
+        Some(model) => top.subcommand(api_command(model)),
+        None => top.subcommand(api_placeholder_command()),
+    }
 }
 
-#[derive(Debug, Subcommand)]
-pub enum CliCommand {
-    /// Install an API from an OpenAPI 3.0 spec.
-    Install(InstallArgs),
+/// Builds the static `install` subcommand with the builder API.
+fn install_command() -> Command {
+    Command::new("install")
+        .about("Install an API from an OpenAPI 3.0 spec.")
+        .disable_help_subcommand(true)
+        .arg(
+            Arg::new("name")
+                .value_name("name")
+                .required(true)
+                .help("Name under which to store the API model."),
+        )
+        .arg(
+            Arg::new("spec_source")
+                .value_name("spec")
+                .required(true)
+                .help("Path to local file or http(s) URL of an OpenAPI 3.0 JSON document."),
+        )
+        .arg(
+            Arg::new("base_url")
+                .long("base-url")
+                .help("Override the base URL taken from servers[0].url."),
+        )
 }
 
-#[derive(Debug, Args)]
-pub struct InstallArgs {
-    /// Name under which to store the API model (~/.clining/<name>.json).
-    pub name: String,
-
-    /// Path or http(s) URL of an OpenAPI 3.0 JSON document.
-    pub spec_source: String,
-
-    /// Override the base URL taken from servers[0].url.
-    #[arg(long)]
-    pub base_url: Option<String>,
+/// Stand-in for the dynamic per-API subcommand, shown when no model is loaded.
+/// The static path only parses flags, `install`, or no arguments, so the
+/// placeholder is never actually matched.
+fn api_placeholder_command() -> Command {
+    Command::new("<api>").about("Commands for an installed API: clining <name> <group> <command>")
 }
 
-/// Builds a dynamic clap tree for an installed model: `<group>` subcommands
-/// each containing `<command>` subcommands with per-parameter `--long` args.
-/// Help text comes from the `DescribeService` use case so that every level of
+/// Builds the dynamic per-API subcommand tree: `<group>` subcommands each
+/// containing `<command>` subcommands with per-parameter `--long` args. Help
+/// text comes from the `DescribeService` use case so that every level of
 /// `--help` renders useful, spec-derived information.
-pub fn build_api_command(model: &ApiModel) -> Command {
+fn api_command(model: &ApiModel) -> Command {
     let help = DescribeService::describe(model);
-    let mut top = Command::new("clining")
+    let mut api = Command::new(help.name.clone())
         .about(format!("Commands for API '{}'", help.name))
+        .disable_help_subcommand(true)
         .subcommand_required(true);
     for group in &help.groups {
         let mut group_cmd = Command::new(group.name.clone())
@@ -85,9 +105,9 @@ pub fn build_api_command(model: &ApiModel) -> Command {
             command_cmd = command_cmd.after_help(command_footer(operation));
             group_cmd = group_cmd.subcommand(command_cmd);
         }
-        top = top.subcommand(group_cmd);
+        api = api.subcommand(group_cmd);
     }
-    top
+    api
 }
 
 /// Help text for a group subcommand: the tag description when present, else a
@@ -192,16 +212,22 @@ where
 
     /// Runs the `install` subcommand, which parses the spec and persists the model.
     fn run_install(&self, args: &[String]) -> ExitCode {
-        let result = match Cli::try_parse_from(args) {
-            Ok(cli) => match cli.command {
-                CliCommand::Install(install_args) => self.install(&install_args),
-            },
+        let matches = match build_cli_command(None).try_get_matches_from(args) {
+            Ok(matches) => matches,
             Err(err) => {
                 let _ = err.print();
                 return ExitCode::from(err.exit_code() as u8);
             }
         };
-        match result {
+        let install = matches
+            .subcommand_matches("install")
+            .expect("install subcommand is required");
+        let name = install.get_one::<String>("name").expect("name is required");
+        let spec_source = install
+            .get_one::<String>("spec_source")
+            .expect("spec_source is required");
+        let base_url = install.get_one::<String>("base_url").map(String::as_str);
+        match self.install(name, spec_source, base_url) {
             Ok(()) => ExitCode::SUCCESS,
             Err(err) => {
                 eprintln!("error: {err}");
@@ -212,7 +238,7 @@ where
 
     /// Runs the static command tree, which is just for help and tests.
     fn run_static(&self, args: &[String]) -> ExitCode {
-        match Cli::try_parse_from(args) {
+        match build_cli_command(None).try_get_matches_from(args) {
             Ok(_) => ExitCode::SUCCESS,
             Err(err) => {
                 let _ = err.print();
@@ -237,11 +263,9 @@ where
                 return ExitCode::FAILURE;
             }
         };
-        // The second positional argument is the command group, and the third is the command.
-        let mut tree_args = Vec::with_capacity(args.len().saturating_sub(1));
-        tree_args.push(args[1].clone());
-        tree_args.extend_from_slice(&args[2..]);
-        let matches = match build_api_command(&model).try_get_matches_from(&tree_args) {
+        // Parse the full argv against the unified tree: the API name is a real
+        // subcommand, so usage/help render the invocation exactly as typed.
+        let matches = match build_cli_command(Some(&model)).try_get_matches_from(args) {
             Ok(matches) => matches,
             Err(err) => {
                 let _ = err.print();
@@ -249,10 +273,17 @@ where
             }
         };
         // Extract the group and command names and their matches from the parsed clap matches.
-        let group_name = matches.subcommand_name().map(str::to_owned);
+        let api_matches = match matches.subcommand_matches(api_name.as_str()) {
+            Some(matches) => matches,
+            None => {
+                eprintln!("error: missing command group or command");
+                return ExitCode::FAILURE;
+            }
+        };
+        let group_name = api_matches.subcommand_name().map(str::to_owned);
         let group_matches = group_name
             .as_ref()
-            .and_then(|name| matches.subcommand_matches(name));
+            .and_then(|name| api_matches.subcommand_matches(name));
         let command_name = group_matches
             .and_then(|m| m.subcommand_name())
             .map(str::to_owned);
@@ -335,10 +366,13 @@ where
     }
 
     /// Installs an API model by learning it from the spec and persisting it to the store.
-    fn install(&self, args: &InstallArgs) -> Result<(), DomainError> {
-        let model = self
-            .learn
-            .learn(&args.name, &args.spec_source, args.base_url.as_deref())?;
+    fn install(
+        &self,
+        name: &str,
+        spec_source: &str,
+        base_url: Option<&str>,
+    ) -> Result<(), DomainError> {
+        let model = self.learn.learn(name, spec_source, base_url)?;
         let groups = model.operation_groups.len();
         let commands = model
             .operation_groups
@@ -476,37 +510,69 @@ mod tests {
 
     #[test]
     fn install_args_parse_with_optional_base_url() {
-        let CliCommand::Install(args) = Cli::try_parse_from([
-            "clining",
-            "install",
-            "pets",
-            "spec.json",
-            "--base-url",
-            "http://localhost:8080",
-        ])
-        .unwrap()
-        .command;
-        assert_eq!(args.name, "pets");
-        assert_eq!(args.spec_source, "spec.json");
-        assert_eq!(args.base_url.as_deref(), Some("http://localhost:8080"));
-    }
-
-    #[test]
-    fn install_args_parse_without_base_url() {
-        let CliCommand::Install(args) =
-            Cli::try_parse_from(["clining", "install", "pets", "spec.json"])
-                .unwrap()
-                .command;
-        assert_eq!(args.base_url, None);
-    }
-
-    #[test]
-    fn dynamic_tree_parses_group_command_and_params() {
-        let cmd = build_api_command(&sample_model());
+        let cmd = build_cli_command(None);
         cmd.clone().debug_assert();
         let matches = cmd
             .try_get_matches_from([
                 "clining",
+                "install",
+                "pets",
+                "spec.json",
+                "--base-url",
+                "http://localhost:8080",
+            ])
+            .unwrap();
+        let install = matches.subcommand_matches("install").unwrap();
+        assert_eq!(
+            install.get_one::<String>("name").map(String::as_str),
+            Some("pets")
+        );
+        assert_eq!(
+            install.get_one::<String>("spec_source").map(String::as_str),
+            Some("spec.json")
+        );
+        assert_eq!(
+            install.get_one::<String>("base_url").map(String::as_str),
+            Some("http://localhost:8080")
+        );
+    }
+
+    #[test]
+    fn install_args_parse_without_base_url() {
+        let cmd = build_cli_command(None);
+        let matches = cmd
+            .try_get_matches_from(["clining", "install", "pets", "spec.json"])
+            .unwrap();
+        let install = matches.subcommand_matches("install").unwrap();
+        assert_eq!(
+            install.get_one::<String>("name").map(String::as_str),
+            Some("pets")
+        );
+        assert_eq!(
+            install.get_one::<String>("spec_source").map(String::as_str),
+            Some("spec.json")
+        );
+        assert_eq!(install.get_one::<String>("base_url"), None);
+    }
+
+    #[test]
+    fn static_help_lists_install_and_api_placeholder() {
+        let mut cmd = build_cli_command(None);
+        cmd.clone().debug_assert();
+        let help = cmd.render_help().to_string();
+        assert!(help.contains("install"), "{help}");
+        assert!(help.contains("<api>"), "{help}");
+        assert!(help.contains("Commands for an installed API"), "{help}");
+    }
+
+    #[test]
+    fn dynamic_tree_parses_group_command_and_params() {
+        let cmd = build_cli_command(Some(&sample_model()));
+        cmd.clone().debug_assert();
+        let matches = cmd
+            .try_get_matches_from([
+                "clining",
+                "pets",
                 "pets",
                 "get-pet",
                 "--pet-id",
@@ -516,7 +582,9 @@ mod tests {
             ])
             .unwrap();
         assert_eq!(matches.subcommand_name(), Some("pets"));
-        let group = matches.subcommand_matches("pets").unwrap();
+        let api = matches.subcommand_matches("pets").unwrap();
+        assert_eq!(api.subcommand_name(), Some("pets"));
+        let group = api.subcommand_matches("pets").unwrap();
         assert_eq!(group.subcommand_name(), Some("get-pet"));
         let command = group.subcommand_matches("get-pet").unwrap();
         assert_eq!(
@@ -539,18 +607,20 @@ mod tests {
 
     #[test]
     fn dynamic_tree_rejects_missing_required_path_param() {
-        let cmd = build_api_command(&sample_model());
+        let cmd = build_cli_command(Some(&sample_model()));
         let err = cmd
-            .try_get_matches_from(["clining", "pets", "get-pet"])
+            .try_get_matches_from(["clining", "pets", "pets", "get-pet"])
             .unwrap_err();
         assert_eq!(err.exit_code(), 2);
     }
 
     #[test]
     fn api_help_lists_groups_with_descriptions() {
-        let mut cmd = build_api_command(&sample_model());
+        let cmd = build_cli_command(Some(&sample_model()));
         cmd.clone().debug_assert();
-        let help = cmd.render_help().to_string();
+        let mut api = cmd.find_subcommand("pets").unwrap().clone();
+        api.clone().debug_assert();
+        let help = api.render_help().to_string();
         assert!(help.contains("pets"), "{help}");
         assert!(help.contains("Everything about your pets"), "{help}");
         assert!(help.contains("Commands for API 'pets'"), "{help}");
@@ -558,8 +628,13 @@ mod tests {
 
     #[test]
     fn group_help_lists_commands_with_summaries() {
-        let cmd = build_api_command(&sample_model());
-        let mut group = cmd.find_subcommand("pets").unwrap().clone();
+        let cmd = build_cli_command(Some(&sample_model()));
+        let mut group = cmd
+            .find_subcommand("pets")
+            .unwrap()
+            .find_subcommand("pets")
+            .unwrap()
+            .clone();
         group.clone().debug_assert();
         let help = group.render_help().to_string();
         assert!(help.contains("get-pet"), "{help}");
@@ -568,8 +643,10 @@ mod tests {
 
     #[test]
     fn command_help_shows_params_and_body_schema() {
-        let cmd = build_api_command(&sample_model());
+        let cmd = build_cli_command(Some(&sample_model()));
         let mut command = cmd
+            .find_subcommand("pets")
+            .unwrap()
             .find_subcommand("pets")
             .unwrap()
             .find_subcommand("get-pet")
@@ -605,8 +682,10 @@ mod tests {
 
     #[test]
     fn command_footer_includes_request_and_body() {
-        let cmd = build_api_command(&sample_model());
+        let cmd = build_cli_command(Some(&sample_model()));
         let command = cmd
+            .find_subcommand("pets")
+            .unwrap()
             .find_subcommand("pets")
             .unwrap()
             .find_subcommand("get-pet")
