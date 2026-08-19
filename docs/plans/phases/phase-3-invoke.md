@@ -19,7 +19,7 @@ related:
 
 The second core flow: `clining <name> <group> <command> --param value < body.json` performs a real HTTP request. Adds the request builder, the reqwest adapter, the runtime-built clap tree, response streaming, and exit-code semantics. Satisfies FR-3 and completes FR-5's invoke-side behavior.
 
-Implementation notes: `HttpRequest`/`HttpResponse`/`HttpInvoker` are domain-agnostic (no infra imports). The request builder substitutes path params (encoding values), expands query params (repeated values become repeated keys), and enforces body requiredness/unexpected-body rules. `InvokeCommandService` loads the model via `ApiStore`, resolves group/command with errors that list valid names, builds the request, and sends it. The CLI dispatches on the first positional: `install` → static path; anything else loads the model and builds a dynamic clap tree (`<group>` → `<command>` with `--long` args, `ArgAction::Append` for repeatable query params, path params required). `NotFound` now carries the store path so unknown-API errors point at `~/.clining/`; corrupt stored models surface as `InvalidStoredModel`, never `NotFound`. Response body is written byte-exact to stdout, an `HTTP/1.1 <status>` line plus headers go to stderr, and the exit code is `0` on 2xx and `1` otherwise.
+Implementation notes: `HttpRequest`/`HttpResponse`/`HttpInvoker` are domain-agnostic (no infra imports). The request builder substitutes path params (encoding values), expands query params (repeated values become repeated keys), and enforces body requiredness/unexpected-body rules. `InvokeOperationService` loads the model via `ApiStore`, resolves group/command with errors that list valid names, builds the request, and sends it. The CLI dispatches on the first positional: `install` → static path; anything else loads the model and builds a dynamic clap tree (`<group>` → `<command>` with `--long` args, `ArgAction::Append` for repeatable query params, path params required). `NotFound` now carries the store path so unknown-API errors point at `~/.clining/`; corrupt stored models surface as `InvalidStoredModel`, never `NotFound`. Response body is written byte-exact to stdout, an `HTTP/1.1 <status>` line plus headers go to stderr, and the exit code is `0` on 2xx and `1` otherwise.
 
 ## Task Details
 
@@ -56,12 +56,12 @@ Implementation notes: `HttpRequest`/`HttpResponse`/`HttpInvoker` are domain-agno
 - **Acceptance Criteria:**
   - [x] Test against a local `std::net::TcpListener` mock: request line, headers, and body match; response roundtrips.
 
-### 4. Implement the InvokeCommandService use case
+### 4. Implement the InvokeOperationService use case
 
 - **Prerequisites / Dependencies:** Tasks 1–3.
 - **Affected Files:**
-  - `src/application/invoke_command.rs`
-- **Affected Symbols:** `InvokeCommandService::invoke(api_name, group, command, params, body)`
+  - `src/application/invoke_operation.rs`
+- **Affected Symbols:** `InvokeOperationService::invoke(api_name, group, command, params, body)`
 - **Description:** Load model via `ApiStore`; resolve group + command (unknown group/command → targeted error listing valid names); build the request; send via `HttpInvoker`; return the response. A corrupt stored model surfaces as `InvalidStoredModel`, never `NotFound`.
 - **Acceptance Criteria:**
   - [x] Fake-port unit tests: successful invoke; unknown group/command errors name valid alternatives.

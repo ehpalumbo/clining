@@ -70,7 +70,7 @@ impl ApiStore for JsonFileStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::model::{CommandGroup, ModelVersion};
+    use crate::domain::model::{ApiOperationGroup, ModelVersion};
 
     fn temp_root(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("clining-store-{tag}-{}", std::process::id()));
@@ -84,9 +84,9 @@ mod tests {
             name: name.to_owned(),
             base_url: "https://example.com".to_owned(),
             version: ModelVersion::V1,
-            command_groups: vec![CommandGroup {
+            operation_groups: vec![ApiOperationGroup {
                 name: "default".to_owned(),
-                commands: vec![],
+                operations: vec![],
             }],
         }
     }

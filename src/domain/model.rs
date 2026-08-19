@@ -18,19 +18,19 @@ pub struct ApiModel {
     pub name: String,
     pub base_url: String,
     pub version: ModelVersion,
-    pub command_groups: Vec<CommandGroup>,
+    pub operation_groups: Vec<ApiOperationGroup>,
 }
 
-/// A named group of commands derived from an OpenAPI tag.
+/// A named group of operations derived from an OpenAPI tag.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct CommandGroup {
+pub struct ApiOperationGroup {
     pub name: String,
-    pub commands: Vec<Command>,
+    pub operations: Vec<ApiOperation>,
 }
 
-/// A single endpoint exposed as a CLI command.
+/// A single API operation (endpoint) exposed as a CLI command.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Command {
+pub struct ApiOperation {
     pub name: String,
     pub summary: Option<String>,
     pub method: HttpMethod,
@@ -56,7 +56,7 @@ pub struct BodySpec {
     pub schema_json: Option<String>,
 }
 
-/// HTTP method of a command.
+/// HTTP method of an operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum HttpMethod {
@@ -87,11 +87,11 @@ pub struct HttpResponse {
     pub body: Vec<u8>,
 }
 
-/// A fully-resolved command invocation: the selected command plus input data.
+/// A fully-resolved operation invocation: the selected operation plus input data.
 #[derive(Debug, PartialEq, Eq)]
 pub struct ApiInvocationRequest<'m> {
     pub base_url: String,
-    pub command: &'m Command,
+    pub operation: &'m ApiOperation,
     pub params: HashMap<String, Vec<String>>,
     pub body: Option<Vec<u8>>,
 }
@@ -99,13 +99,13 @@ pub struct ApiInvocationRequest<'m> {
 impl<'m> ApiInvocationRequest<'m> {
     pub fn new(
         base_url: String,
-        command: &'m Command,
+        operation: &'m ApiOperation,
         params: HashMap<String, Vec<String>>,
         body: Option<Vec<u8>>,
     ) -> Self {
         Self {
             base_url,
-            command,
+            operation,
             params,
             body,
         }

@@ -45,7 +45,7 @@ This phase establishes the project skeleton and toolchain so every later phase l
 - **Affected Files:**
   - `src/main.rs`
   - `src/domain/{mod.rs, model.rs, command_name.rs, ports.rs, errors.rs}`
-  - `src/application/{mod.rs, learn_api.rs, invoke_command.rs, request_builder.rs, describe.rs}`
+  - `src/application/{mod.rs, learn_api.rs, invoke_operation.rs, request_builder.rs, describe.rs}`
   - `src/infra/{mod.rs, cli/, storage/, openapi/, source/, http/}`
 - **Affected Symbols:** placeholder `main()`
 - **Description:** Create the empty module tree per the [Architecture Overview](../../architecture/overview.md). Placeholder `main.rs` prints a one-line usage banner. Add `#![deny(unsafe_code)]`.

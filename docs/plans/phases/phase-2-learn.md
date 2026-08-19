@@ -26,8 +26,8 @@ Implements the complete learn flow: fetch a spec (file or URI), parse OpenAPI 3.
 - **Prerequisites / Dependencies:** Phase 1.
 - **Affected Files:**
   - `src/domain/model.rs`
-- **Affected Symbols:** `ApiModel`, `CommandGroup`, `Command`, `Param`, `ParamLocation`, `HttpMethod`, `BodySpec`, `ModelVersion`
-- **Description:** Define the persisted `ApiModel` (`name`, `base_url`, `version`, `command_groups`) with serde derives. `Command` carries `name`, `summary`, `method`, `path` template, `path_params`, `query_params`, and an optional `request_body` (`BodySpec { required, content_type, schema_json }`). `Param` stores both the original `name` (from the spec) and the kebab-cased `cli_name` used on the command line. `BodySpec.schema_json` stores the raw schema for help display only (no validation in v0).
+- **Affected Symbols:** `ApiModel`, `ApiOperationGroup`, `ApiOperation`, `Param`, `ParamLocation`, `HttpMethod`, `BodySpec`, `ModelVersion`
+- **Description:** Define the persisted `ApiModel` (`name`, `base_url`, `version`, `operation_groups`) with serde derives. `ApiOperation` carries `name`, `summary`, `method`, `path` template, `path_params`, `query_params`, and an optional `request_body` (`BodySpec { required, content_type, schema_json }`). `Param` stores both the original `name` (from the spec) and the kebab-cased `cli_name` used on the command line. `BodySpec.schema_json` stores the raw schema for help display only (no validation in v0).
 - **Acceptance Criteria:**
   - [x] All entities serialize/deserialize losslessly via serde_json.
 

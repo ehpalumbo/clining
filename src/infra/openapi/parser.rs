@@ -6,7 +6,7 @@ use super::spec::{MediaType, OpenApi30Spec, Operation, Parameter, PathItem, Requ
 use crate::domain::command_name::{cli_name, command_name, disambiguate};
 use crate::domain::errors::DomainError;
 use crate::domain::model::{
-    ApiModel, BodySpec, Command, CommandGroup, HttpMethod, ModelVersion, Param,
+    ApiModel, ApiOperation, ApiOperationGroup, BodySpec, HttpMethod, ModelVersion, Param,
 };
 use crate::domain::ports::OpenApiParser;
 
@@ -63,8 +63,8 @@ impl Parser {
             .and_then(|i| i.title.clone())
             .unwrap_or_default();
 
-        let mut groups: Vec<CommandGroup> = Vec::new();
-        let mut group_index: BTreeMap<String, usize> = BTreeMap::new();
+        let mut operation_groups: Vec<ApiOperationGroup> = Vec::new();
+        let mut operation_group_index: BTreeMap<String, usize> = BTreeMap::new();
         for (path, item) in &spec.paths {
             for (method, op) in Self::operations(item) {
                 let group_name = op
@@ -73,28 +73,32 @@ impl Parser {
                     .and_then(|t| t.first())
                     .cloned()
                     .unwrap_or_else(|| "default".to_owned());
-                let idx = match group_index.get(&group_name) {
+                let idx = match operation_group_index.get(&group_name) {
                     Some(i) => *i,
                     None => {
-                        let i = groups.len();
-                        groups.push(CommandGroup {
+                        let i = operation_groups.len();
+                        operation_groups.push(ApiOperationGroup {
                             name: group_name.clone(),
-                            commands: Vec::new(),
+                            operations: Vec::new(),
                         });
-                        group_index.insert(group_name.clone(), i);
+                        operation_group_index.insert(group_name.clone(), i);
                         i
                     }
                 };
-                groups[idx]
-                    .commands
-                    .push(Self::build_command(op, item, method, path));
+                operation_groups[idx]
+                    .operations
+                    .push(Self::build_operation(op, item, method, path));
             }
         }
-        for group in &mut groups {
-            let names: Vec<String> = group.commands.iter().map(|c| c.name.clone()).collect();
+        for operation_group in &mut operation_groups {
+            let names: Vec<String> = operation_group
+                .operations
+                .iter()
+                .map(|o| o.name.clone())
+                .collect();
             let disambiguated = disambiguate(names);
-            for (command, name) in group.commands.iter_mut().zip(disambiguated) {
-                command.name = name;
+            for (operation, name) in operation_group.operations.iter_mut().zip(disambiguated) {
+                operation.name = name;
             }
         }
 
@@ -102,7 +106,7 @@ impl Parser {
             name,
             base_url,
             version: ModelVersion::V1,
-            command_groups: groups,
+            operation_groups,
         }
     }
 
@@ -135,7 +139,12 @@ impl Parser {
         out
     }
 
-    fn build_command(op: &Operation, item: &PathItem, method: HttpMethod, path: &str) -> Command {
+    fn build_operation(
+        op: &Operation,
+        item: &PathItem,
+        method: HttpMethod,
+        path: &str,
+    ) -> ApiOperation {
         let name = command_name(op.operation_id.as_deref(), method, path);
         let params = Self::merged_parameters(item, op);
         let path_params = params
@@ -149,7 +158,7 @@ impl Parser {
             .map(Self::to_param)
             .collect();
         let request_body = op.request_body.as_ref().map(Self::to_body_spec);
-        Command {
+        ApiOperation {
             name,
             summary: op.summary.clone(),
             method,
@@ -267,27 +276,27 @@ mod tests {
         assert_eq!(model.version, ModelVersion::V1);
         assert_eq!(model.name, "Petstore");
         assert_eq!(model.base_url, "https://api.example.com/v1");
-        assert_eq!(model.command_groups.len(), 3);
+        assert_eq!(model.operation_groups.len(), 3);
 
         let names: Vec<&str> = model
-            .command_groups
+            .operation_groups
             .iter()
             .map(|g| g.name.as_str())
             .collect();
         assert_eq!(names, vec!["pets", "default", "store"]);
 
-        let pets = &model.command_groups[0];
+        let pets = &model.operation_groups[0];
         assert_eq!(pets.name, "pets");
-        let cmd_names: Vec<&str> = pets.commands.iter().map(|c| c.name.as_str()).collect();
-        assert_eq!(cmd_names, vec!["list-pets", "create-pet"]);
+        let op_names: Vec<&str> = pets.operations.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(op_names, vec!["list-pets", "create-pet"]);
     }
 
     #[test]
     fn maps_parameters_and_body() {
         let model = parse_fixture();
-        let pets = &model.command_groups[0];
+        let pets = &model.operation_groups[0];
 
-        let list = &pets.commands[0];
+        let list = &pets.operations[0];
         assert_eq!(list.method, HttpMethod::Get);
         assert_eq!(list.path, "/pets");
         assert!(list.path_params.is_empty());
@@ -304,7 +313,7 @@ mod tests {
         );
         assert_eq!(limit.cli_name, "limit");
 
-        let create = &pets.commands[1];
+        let create = &pets.operations[1];
         let query_names: Vec<&str> = create
             .query_params
             .iter()
@@ -330,11 +339,11 @@ mod tests {
     fn fallback_names_and_default_group() {
         let model = parse_fixture();
         let default = model
-            .command_groups
+            .operation_groups
             .iter()
             .find(|g| g.name == "default")
             .unwrap();
-        let get = &default.commands[0];
+        let get = &default.operations[0];
         assert_eq!(get.name, "get-pets");
         assert_eq!(get.method, HttpMethod::Get);
         assert_eq!(get.path, "/pets/{petId}");
@@ -356,8 +365,8 @@ mod tests {
             }
         }"#;
         let model = Parser.parse(spec.as_bytes()).unwrap();
-        let names: Vec<&str> = model.command_groups[0]
-            .commands
+        let names: Vec<&str> = model.operation_groups[0]
+            .operations
             .iter()
             .map(|c| c.name.as_str())
             .collect();

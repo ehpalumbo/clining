@@ -1,4 +1,4 @@
-//! "Invoke command" use case: build and send the HTTP request for an
+//! "Invoke operation" use case: build and send the HTTP request for an
 //! `ApiInvocationRequest` (Phase 3).
 
 use crate::application::request_builder::build_request;
@@ -6,15 +6,15 @@ use crate::domain::errors::DomainError;
 use crate::domain::model::{ApiInvocationRequest, HttpResponse};
 use crate::domain::ports::HttpInvoker;
 
-/// Sends a fully-resolved command invocation.
-pub struct InvokeCommandService<I>
+/// Sends a fully-resolved operation invocation.
+pub struct InvokeOperationService<I>
 where
     I: HttpInvoker,
 {
     invoker: I,
 }
 
-impl<I> InvokeCommandService<I>
+impl<I> InvokeOperationService<I>
 where
     I: HttpInvoker,
 {
@@ -30,7 +30,7 @@ where
     ) -> Result<HttpResponse, DomainError> {
         let request = build_request(
             &invocation.base_url,
-            invocation.command,
+            invocation.operation,
             &invocation.params,
             invocation.body.as_deref(),
         )?;
@@ -47,7 +47,7 @@ mod tests {
     use std::rc::Rc;
 
     use crate::domain::model::{
-        ApiModel, Command, CommandGroup, HttpMethod, HttpRequest, ModelVersion, Param,
+        ApiModel, ApiOperation, ApiOperationGroup, HttpMethod, HttpRequest, ModelVersion, Param,
     };
 
     fn sample_model() -> ApiModel {
@@ -55,9 +55,9 @@ mod tests {
             name: "pets".to_owned(),
             base_url: "https://api.example.com/v1".to_owned(),
             version: ModelVersion::V1,
-            command_groups: vec![CommandGroup {
+            operation_groups: vec![ApiOperationGroup {
                 name: "pets".to_owned(),
-                commands: vec![Command {
+                operations: vec![ApiOperation {
                     name: "get-pet".to_owned(),
                     summary: None,
                     method: HttpMethod::Get,
@@ -78,8 +78,8 @@ mod tests {
         }
     }
 
-    fn command(model: &ApiModel) -> &Command {
-        &model.command_groups[0].commands[0]
+    fn operation(model: &ApiModel) -> &ApiOperation {
+        &model.operation_groups[0].operations[0]
     }
 
     fn request<'m>(
@@ -87,7 +87,7 @@ mod tests {
         params: HashMap<String, Vec<String>>,
         body: Option<Vec<u8>>,
     ) -> ApiInvocationRequest<'m> {
-        ApiInvocationRequest::new(model.base_url.clone(), command(model), params, body)
+        ApiInvocationRequest::new(model.base_url.clone(), operation(model), params, body)
     }
 
     struct FakeInvoker {
@@ -106,14 +106,14 @@ mod tests {
     }
 
     fn service() -> (
-        InvokeCommandService<FakeInvoker>,
+        InvokeOperationService<FakeInvoker>,
         Rc<RefCell<Option<HttpRequest>>>,
     ) {
         let captured = Rc::new(RefCell::new(None));
         let invoker = FakeInvoker {
             captured: Rc::clone(&captured),
         };
-        (InvokeCommandService::new(invoker), captured)
+        (InvokeOperationService::new(invoker), captured)
     }
 
     #[test]

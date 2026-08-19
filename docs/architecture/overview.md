@@ -25,7 +25,7 @@ clining is small today, but its two halves — learning an API versus invoking e
 
 The innermost layer, written in pure Rust with no external dependencies. It owns:
 
-- **Entities** — `ApiModel`, `CommandGroup`, `Command`, `Param`, `HttpMethod`, `BodySpec`, plus request/response value types. Plain data with serde derives for persistence.
+- **Entities** — `ApiModel`, `ApiOperationGroup`, `ApiOperation`, `Param`, `HttpMethod`, `BodySpec`, plus request/response value types. Plain data with serde derives for persistence.
 - **Rules** — pure functions for command naming (operationId kebab-casing, method+path fallback, collision disambiguation) and kebab-casing of parameter CLI names.
 - **Ports** — traits the outer layers implement: `ApiStore` (load/save models), `SpecLoader` (fetch spec bytes), `OpenApiParser` (parse spec into a model), `HttpInvoker` (send a request, return a response).
 - **Errors** — the domain error vocabulary (not found, invalid stored model, invalid spec, parameter/body errors, network, I/O).
@@ -35,7 +35,7 @@ The innermost layer, written in pure Rust with no external dependencies. It owns
 Depends only on the domain. Orchestrates ports into user-facing flows:
 
 - **Learn API** — `SpecLoader` → `OpenApiParser` → `ApiStore.save`, with base-URL override handling.
-- **Invoke command** — `ApiStore.load` → resolve group/command → build request from params and body → `HttpInvoker.send`.
+- **Invoke operation** — `ApiStore.load` → resolve group/operation → build request from params and body → `HttpInvoker.send`.
 - **Describe** — produce structured help data (groups, commands, parameters, body hints) from a model.
 
 ### Infrastructure (adapters)
@@ -90,4 +90,4 @@ infrastructure  →  application  →  domain
 
 ### Invoke
 
-`cli args + stdin body → InvokeCommand use case → ApiStore.load → resolve → build request → HttpInvoker.send → response → body:stdout, status+headers:stderr, exit code`
+`cli args + stdin body → InvokeOperation use case → ApiStore.load → resolve → build request → HttpInvoker.send → response → body:stdout, status+headers:stderr, exit code`

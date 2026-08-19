@@ -81,7 +81,7 @@ mod tests {
                 name: String::new(),
                 base_url: "https://from-parser.example.com".to_owned(),
                 version: ModelVersion::V1,
-                command_groups: vec![],
+                operation_groups: vec![],
             })
         }
     }

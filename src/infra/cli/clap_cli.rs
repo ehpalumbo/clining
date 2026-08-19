@@ -6,10 +6,10 @@ use std::process::ExitCode;
 
 use clap::{Arg, ArgAction, Args, Command, CommandFactory, Parser, Subcommand};
 
-use crate::application::invoke_command::InvokeCommandService;
+use crate::application::invoke_operation::InvokeOperationService;
 use crate::application::learn_api::LearnApiService;
 use crate::domain::errors::DomainError;
-use crate::domain::model::{ApiInvocationRequest, ApiModel, CommandGroup};
+use crate::domain::model::{ApiInvocationRequest, ApiModel, ApiOperationGroup};
 use crate::domain::ports::{ApiStore, HttpInvoker, OpenApiParser, SpecLoader};
 
 #[derive(Debug, Parser)]
@@ -54,14 +54,14 @@ pub fn build_api_command(model: &ApiModel) -> Command {
     let mut top = Command::new("clining")
         .about("Invoke a command from an installed API")
         .subcommand_required(true);
-    for group in &model.command_groups {
+    for group in &model.operation_groups {
         let mut group_cmd = Command::new(group.name.clone()).subcommand_required(true);
-        for command in &group.commands {
-            let mut command_cmd = Command::new(command.name.clone());
-            if let Some(summary) = &command.summary {
+        for operation in &group.operations {
+            let mut command_cmd = Command::new(operation.name.clone());
+            if let Some(summary) = &operation.summary {
                 command_cmd = command_cmd.about(summary);
             }
-            for param in &command.path_params {
+            for param in &operation.path_params {
                 command_cmd = command_cmd.arg(
                     Arg::new(param.cli_name.clone())
                         .long(param.cli_name.clone())
@@ -69,7 +69,7 @@ pub fn build_api_command(model: &ApiModel) -> Command {
                         .required(true),
                 );
             }
-            for param in &command.query_params {
+            for param in &operation.query_params {
                 let mut arg = Arg::new(param.cli_name.clone())
                     .long(param.cli_name.clone())
                     .value_name(param.name.clone())
@@ -212,24 +212,31 @@ where
                 return ExitCode::FAILURE;
             }
         };
-        // Look up the group and command in the model to get their definitions.
-        let group = match model.command_groups.iter().find(|g| g.name == group_name) {
+        // Look up the group and operation in the model to get their definitions.
+        let operation_group = match model.operation_groups.iter().find(|g| g.name == group_name) {
             Some(group) => group,
             None => {
                 eprintln!("error: {}", unknown_group(&group_name, &model));
                 return ExitCode::FAILURE;
             }
         };
-        let command = match group.commands.iter().find(|c| c.name == command_name) {
-            Some(command) => command,
+        let operation = match operation_group
+            .operations
+            .iter()
+            .find(|c| c.name == command_name)
+        {
+            Some(operation) => operation,
             None => {
-                eprintln!("error: {}", unknown_command(&command_name, group));
+                eprintln!(
+                    "error: {}",
+                    unknown_operation(&command_name, operation_group)
+                );
                 return ExitCode::FAILURE;
             }
         };
         // Collect the parameter values from the command matches into a HashMap keyed by CLI name.
         let mut params: HashMap<String, Vec<String>> = HashMap::new();
-        for param in command.path_params.iter().chain(&command.query_params) {
+        for param in operation.path_params.iter().chain(&operation.query_params) {
             if let Some(values) =
                 command_matches.and_then(|m| m.get_many::<String>(&param.cli_name))
             {
@@ -244,8 +251,8 @@ where
             params,
             body.as_ref().map_or(0, Vec::len)
         );
-        let invocation = ApiInvocationRequest::new(model.base_url.clone(), command, params, body);
-        let service = InvokeCommandService::new(&self.invoker);
+        let invocation = ApiInvocationRequest::new(model.base_url.clone(), operation, params, body);
+        let service = InvokeOperationService::new(&self.invoker);
         let response = match service.invoke(&invocation) {
             Ok(response) => response,
             Err(err) => {
@@ -287,11 +294,11 @@ where
         let model = self
             .learn
             .learn(&args.name, &args.spec_source, args.base_url.as_deref())?;
-        let groups = model.command_groups.len();
+        let groups = model.operation_groups.len();
         let commands = model
-            .command_groups
+            .operation_groups
             .iter()
-            .map(|g| g.commands.len())
+            .map(|g| g.operations.len())
             .sum::<usize>();
         println!(
             "Installed {} ({} commands, {} groups)",
@@ -304,7 +311,7 @@ where
 /// Returns a `DomainError::Parameter` for an unknown command group, listing valid groups.
 fn unknown_group(group_name: &str, model: &ApiModel) -> DomainError {
     let names: Vec<&str> = model
-        .command_groups
+        .operation_groups
         .iter()
         .map(|g| g.name.as_str())
         .collect();
@@ -317,8 +324,8 @@ fn unknown_group(group_name: &str, model: &ApiModel) -> DomainError {
 }
 
 /// Returns a `DomainError::Parameter` for an unknown command, listing valid commands.
-fn unknown_command(command_name: &str, group: &CommandGroup) -> DomainError {
-    let names: Vec<&str> = group.commands.iter().map(|c| c.name.as_str()).collect();
+fn unknown_operation(command_name: &str, group: &ApiOperationGroup) -> DomainError {
+    let names: Vec<&str> = group.operations.iter().map(|c| c.name.as_str()).collect();
     DomainError::Parameter {
         message: format!(
             "unknown command '{command_name}' in group '{}'; valid commands: {}",
@@ -369,17 +376,16 @@ fn status_text(status: u16) -> &'static str {
 mod tests {
     use super::*;
 
-    use crate::domain::model::Command as ModelCommand;
-    use crate::domain::model::{CommandGroup, HttpMethod, ModelVersion, Param};
+    use crate::domain::model::{ApiOperation, ApiOperationGroup, HttpMethod, ModelVersion, Param};
 
     fn sample_model() -> ApiModel {
         ApiModel {
             name: "pets".to_owned(),
             base_url: "https://example.com".to_owned(),
             version: ModelVersion::V1,
-            command_groups: vec![CommandGroup {
+            operation_groups: vec![ApiOperationGroup {
                 name: "pets".to_owned(),
-                commands: vec![ModelCommand {
+                operations: vec![ApiOperation {
                     name: "get-pet".to_owned(),
                     summary: Some("Get a pet".to_owned()),
                     method: HttpMethod::Get,

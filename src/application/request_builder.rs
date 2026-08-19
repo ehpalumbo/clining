@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 
 use crate::domain::errors::DomainError;
-use crate::domain::model::{Command, HttpRequest};
+use crate::domain::model::{ApiOperation, HttpRequest};
 
 /// RFC 3986 unreserved characters: alphanumerics plus `-`, `.`, `_`, `~`.
 const UNRESERVED: &AsciiSet = &NON_ALPHANUMERIC
@@ -14,18 +14,18 @@ const UNRESERVED: &AsciiSet = &NON_ALPHANUMERIC
     .remove(b'_')
     .remove(b'~');
 
-/// Builds a fully-specified `HttpRequest` from a command, supplied values,
+/// Builds a fully-specified `HttpRequest` from an operation, supplied values,
 /// and an optional body. Values are keyed by the CLI parameter name
 /// (`Param::cli_name`); path and query parameters are resolved back to their
 /// original spec names during substitution.
 pub fn build_request(
     base_url: &str,
-    command: &Command,
+    operation: &ApiOperation,
     values: &HashMap<String, Vec<String>>,
     body: Option<&[u8]>,
 ) -> Result<HttpRequest, DomainError> {
     let body = body.filter(|b| !b.is_empty());
-    let url = build_url(base_url, command, values)?;
+    let url = build_url(base_url, operation, values)?;
 
     let mut headers: Vec<(String, String)> = vec![
         (
@@ -35,7 +35,7 @@ pub fn build_request(
         ("Accept".to_owned(), "application/json".to_owned()),
     ];
 
-    match &command.request_body {
+    match &operation.request_body {
         Some(spec) => {
             if let Some(bytes) = body {
                 let content_type = if spec.content_type.is_empty() {
@@ -45,7 +45,7 @@ pub fn build_request(
                 };
                 headers.push(("Content-Type".to_owned(), content_type.to_owned()));
                 return Ok(HttpRequest {
-                    method: command.method,
+                    method: operation.method,
                     url,
                     headers,
                     body: Some(bytes.to_vec()),
@@ -53,21 +53,21 @@ pub fn build_request(
             }
             if spec.required {
                 return Err(DomainError::Body {
-                    message: format!("command '{}' requires a request body", command.name),
+                    message: format!("command '{}' requires a request body", operation.name),
                 });
             }
         }
         None => {
             if body.is_some() {
                 return Err(DomainError::Body {
-                    message: format!("command '{}' declares no request body", command.name),
+                    message: format!("command '{}' declares no request body", operation.name),
                 });
             }
         }
     }
 
     Ok(HttpRequest {
-        method: command.method,
+        method: operation.method,
         url,
         headers,
         body: None,
@@ -77,12 +77,12 @@ pub fn build_request(
 /// Builds a URL by substituting path parameters and serializing query parameters.
 fn build_url(
     base_url: &str,
-    command: &Command,
+    operation: &ApiOperation,
     values: &HashMap<String, Vec<String>>,
 ) -> Result<String, DomainError> {
     // Substitute path parameters
-    let mut path = command.path.clone();
-    for param in &command.path_params {
+    let mut path = operation.path.clone();
+    for param in &operation.path_params {
         let placeholder = format!("{{{}}}", param.name);
         match values.get(&param.cli_name).and_then(|v| v.first()) {
             Some(value) => {
@@ -103,7 +103,7 @@ fn build_url(
     }
     // Serialize query parameters
     let mut query: Vec<String> = Vec::new();
-    for param in &command.query_params {
+    for param in &operation.query_params {
         match values.get(&param.cli_name) {
             Some(vals) => {
                 for value in vals {
@@ -143,13 +143,13 @@ mod tests {
 
     use crate::domain::model::{BodySpec, HttpMethod, Param};
 
-    fn command_with(
+    fn operation_with(
         path: &str,
         path_params: Vec<Param>,
         query_params: Vec<Param>,
         request_body: Option<BodySpec>,
-    ) -> Command {
-        Command {
+    ) -> ApiOperation {
+        ApiOperation {
             name: "test".to_owned(),
             summary: None,
             method: HttpMethod::Post,
@@ -178,12 +178,12 @@ mod tests {
 
     #[test]
     fn substitutes_path_and_query() {
-        let command = command_with("/pets/{petId}", vec![pet_id()], vec![status()], None);
+        let operation = operation_with("/pets/{petId}", vec![pet_id()], vec![status()], None);
         let values = HashMap::from([
             ("pet-id".to_owned(), vec!["123".to_owned()]),
             ("status".to_owned(), vec!["available".to_owned()]),
         ]);
-        let req = build_request("https://api.example.com/v1/", &command, &values, None).unwrap();
+        let req = build_request("https://api.example.com/v1/", &operation, &values, None).unwrap();
         assert_eq!(req.method, HttpMethod::Post);
         assert_eq!(
             req.url,
@@ -204,12 +204,12 @@ mod tests {
 
     #[test]
     fn repeated_query_values_become_repeated_keys() {
-        let command = command_with("/pets", vec![], vec![status()], None);
+        let operation = operation_with("/pets", vec![], vec![status()], None);
         let values = HashMap::from([(
             "status".to_owned(),
             vec!["available".to_owned(), "sold".to_owned()],
         )]);
-        let req = build_request("https://api.example.com", &command, &values, None).unwrap();
+        let req = build_request("https://api.example.com", &operation, &values, None).unwrap();
         assert_eq!(
             req.url,
             "https://api.example.com/pets?status=available&status=sold"
@@ -218,12 +218,12 @@ mod tests {
 
     #[test]
     fn encodes_reserved_characters() {
-        let command = command_with("/pets/{petId}", vec![pet_id()], vec![status()], None);
+        let operation = operation_with("/pets/{petId}", vec![pet_id()], vec![status()], None);
         let values = HashMap::from([
             ("pet-id".to_owned(), vec!["a/b c".to_owned()]),
             ("status".to_owned(), vec!["x&y=1".to_owned()]),
         ]);
-        let req = build_request("https://api.example.com", &command, &values, None).unwrap();
+        let req = build_request("https://api.example.com", &operation, &values, None).unwrap();
         assert_eq!(
             req.url,
             "https://api.example.com/pets/a%2Fb%20c?status=x%26y%3D1"
@@ -232,9 +232,9 @@ mod tests {
 
     #[test]
     fn missing_required_path_param_is_error() {
-        let command = command_with("/pets/{petId}", vec![pet_id()], vec![], None);
-        let err =
-            build_request("https://api.example.com", &command, &HashMap::new(), None).unwrap_err();
+        let operation = operation_with("/pets/{petId}", vec![pet_id()], vec![], None);
+        let err = build_request("https://api.example.com", &operation, &HashMap::new(), None)
+            .unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("petId"), "{msg}");
         assert!(msg.contains("--pet-id"), "{msg}");
@@ -247,9 +247,9 @@ mod tests {
             cli_name: "limit".to_owned(),
             required: true,
         };
-        let command = command_with("/pets", vec![], vec![required], None);
-        let err =
-            build_request("https://api.example.com", &command, &HashMap::new(), None).unwrap_err();
+        let operation = operation_with("/pets", vec![], vec![required], None);
+        let err = build_request("https://api.example.com", &operation, &HashMap::new(), None)
+            .unwrap_err();
         assert!(err.to_string().contains("limit"), "{err}");
     }
 
@@ -260,9 +260,9 @@ mod tests {
             cli_name: "pet-id".to_owned(),
             required: false,
         };
-        let command = command_with("/pets/{petId}", vec![optional], vec![], None);
+        let operation = operation_with("/pets/{petId}", vec![optional], vec![], None);
         let req =
-            build_request("https://api.example.com", &command, &HashMap::new(), None).unwrap();
+            build_request("https://api.example.com", &operation, &HashMap::new(), None).unwrap();
         assert_eq!(req.url, "https://api.example.com/pets/");
     }
 
@@ -273,9 +273,9 @@ mod tests {
             content_type: "application/json".to_owned(),
             schema_json: None,
         };
-        let command = command_with("/pets", vec![], vec![], Some(spec));
-        let err =
-            build_request("https://api.example.com", &command, &HashMap::new(), None).unwrap_err();
+        let operation = operation_with("/pets", vec![], vec![], Some(spec));
+        let err = build_request("https://api.example.com", &operation, &HashMap::new(), None)
+            .unwrap_err();
         assert!(err.to_string().contains("request body"), "{err}");
     }
 
@@ -286,10 +286,10 @@ mod tests {
             content_type: "application/json".to_owned(),
             schema_json: None,
         };
-        let command = command_with("/pets", vec![], vec![], Some(spec));
+        let operation = operation_with("/pets", vec![], vec![], Some(spec));
         let req = build_request(
             "https://api.example.com",
-            &command,
+            &operation,
             &HashMap::new(),
             Some(b"{\"name\":\"fluffy\"}"),
         )
@@ -309,10 +309,10 @@ mod tests {
             content_type: String::new(),
             schema_json: None,
         };
-        let command = command_with("/pets", vec![], vec![], Some(spec));
+        let operation = operation_with("/pets", vec![], vec![], Some(spec));
         let req = build_request(
             "https://api.example.com",
-            &command,
+            &operation,
             &HashMap::new(),
             Some(b"{}"),
         )
@@ -326,10 +326,10 @@ mod tests {
 
     #[test]
     fn unexpected_body_is_error() {
-        let command = command_with("/pets", vec![], vec![], None);
+        let operation = operation_with("/pets", vec![], vec![], None);
         let err = build_request(
             "https://api.example.com",
-            &command,
+            &operation,
             &HashMap::new(),
             Some(b"{}"),
         )
@@ -339,10 +339,10 @@ mod tests {
 
     #[test]
     fn empty_body_treated_as_no_body() {
-        let command = command_with("/pets", vec![], vec![], None);
+        let operation = operation_with("/pets", vec![], vec![], None);
         let req = build_request(
             "https://api.example.com",
-            &command,
+            &operation,
             &HashMap::new(),
             Some(b""),
         )
