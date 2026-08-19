@@ -1,184 +1,21 @@
 //! End-to-end tests driving the compiled binary against a local mock server
-//! (Phase 3): install fixture -> invoke -> assert stdout/stderr/exit-code split.
+//! (Phase 3-4): install fixture -> invoke -> assert stdout/stderr/exit-code split.
 
-use std::fs;
-use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
-use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
-use std::sync::{Arc, Mutex};
+mod common;
 
-const FIXTURE: &str = r#"{
-    "openapi": "3.0.0",
-    "info": { "title": "Petstore", "version": "1.0.0" },
-    "paths": {
-        "/pets": {
-            "get": {
-                "operationId": "getPets",
-                "summary": "List pets",
-                "tags": ["pets"],
-                "parameters": [
-                    { "name": "status", "in": "query" }
-                ],
-                "requestBody": {
-                    "required": true,
-                    "content": {
-                        "application/json": { "schema": { "type": "object" } }
-                    }
-                }
-            }
-        },
-        "/pets/{petId}": {
-            "get": {
-                "operationId": "getPet",
-                "tags": ["pets"],
-                "parameters": [
-                    { "name": "petId", "in": "path", "required": true }
-                ]
-            }
-        },
-        "/binary": {
-            "get": {
-                "operationId": "getBinary",
-                "tags": ["pets"]
-            }
-        }
-    }
-}"#;
+use common::{BINARY_BODY, MockServer, install, request_text, run_cli, temp_dir};
 
-const BINARY_BODY: &[u8] = &[0x00, 0x01, 0xfe, 0x0a, 0xff, b'x', 0x80];
-
-fn temp_dir(tag: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("clining-e2e-{tag}-{}", std::process::id()));
-    let _ = fs::remove_dir_all(&dir);
-    fs::create_dir_all(&dir).unwrap();
-    dir
-}
-
-fn headers_end(buf: &[u8]) -> Option<usize> {
-    buf.windows(4).position(|w| w == b"\r\n\r\n")
-}
-
-fn read_full_request(stream: &mut TcpStream) -> Vec<u8> {
-    let mut buf = Vec::new();
-    let mut chunk = [0u8; 4096];
-    loop {
-        let n = stream.read(&mut chunk).unwrap();
-        if n == 0 {
-            break;
-        }
-        buf.extend_from_slice(&chunk[..n]);
-        if let Some(end) = headers_end(&buf) {
-            let head = String::from_utf8_lossy(&buf[..end]);
-            let content_length: usize = head
-                .lines()
-                .map(str::to_ascii_lowercase)
-                .filter_map(|line| {
-                    line.strip_prefix("content-length:")
-                        .map(|v| v.trim().parse().unwrap_or(0))
-                })
-                .next()
-                .unwrap_or(0);
-            if buf.len() >= end + 4 + content_length {
-                break;
-            }
-        }
-    }
-    buf
-}
-
-struct MockServer {
-    addr: std::net::SocketAddr,
-    requests: Arc<Mutex<Vec<Vec<u8>>>>,
-    handle: std::thread::JoinHandle<()>,
-}
-
-impl MockServer {
-    fn start(connections: usize) -> Self {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap();
-        let requests = Arc::new(Mutex::new(Vec::new()));
-        let server_requests = Arc::clone(&requests);
-        let handle = std::thread::spawn(move || {
-            for _ in 0..connections {
-                let Ok((mut stream, _)) = listener.accept() else {
-                    break;
-                };
-                let request = read_full_request(&mut stream);
-                let request_line = String::from_utf8_lossy(&request);
-                server_requests.lock().unwrap().push(request.clone());
-                let (status, body): (u16, &[u8]) = if request_line.starts_with("GET /pets?") {
-                    (200, b"{\"name\":\"fluffy\"}")
-                } else if request_line.starts_with("GET /binary") {
-                    (200, BINARY_BODY)
-                } else if request_line.starts_with("GET /pets/42") {
-                    (200, b"{\"id\":42}")
-                } else {
-                    (404, b"not found")
-                };
-                let head = format!(
-                    "HTTP/1.1 {status} X-Status\r\nContent-Type: application/octet-stream\r\nX-Request-Id: e2e-1\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                    body.len()
-                );
-                stream.write_all(head.as_bytes()).unwrap();
-                stream.write_all(body).unwrap();
-            }
-        });
-        Self {
-            addr,
-            requests,
-            handle,
-        }
-    }
-
-    fn request(&self, index: usize) -> Vec<u8> {
-        self.requests.lock().unwrap()[index].clone()
-    }
-}
-
-fn run_cli(dir: &Path, args: &[&str], stdin: Option<&[u8]>) -> Output {
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_clining"));
-    cmd.args(args).env("CLINING_DIR", dir);
-    let stdin_mode = if stdin.is_some() {
-        Stdio::piped()
-    } else {
-        Stdio::null()
-    };
-    let mut child = cmd
-        .stdin(stdin_mode)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    if let Some(bytes) = stdin {
-        child.stdin.take().unwrap().write_all(bytes).unwrap();
-    }
-    child.wait_with_output().unwrap()
-}
-
-fn request_text(bytes: &[u8]) -> String {
-    String::from_utf8_lossy(bytes).into_owned()
+fn server_base(server: &MockServer) -> String {
+    format!("http://{}", server.addr)
 }
 
 #[test]
 fn install_then_invoke_end_to_end() {
     let dir = temp_dir("happy");
     let server = MockServer::start(2);
-    let spec = dir.join("spec.json");
-    fs::write(&spec, FIXTURE).unwrap();
-    let base = format!("http://{}", server.addr);
+    let base = server_base(&server);
 
-    let install = run_cli(
-        &dir,
-        &[
-            "install",
-            "pets",
-            spec.to_str().unwrap(),
-            "--base-url",
-            &base,
-        ],
-        None,
-    );
+    let install = install(&dir, "pets", Some(&base));
     assert!(
         install.status.success(),
         "{}",
@@ -224,23 +61,59 @@ fn install_then_invoke_end_to_end() {
 }
 
 #[test]
+fn repeated_query_values_become_repeated_keys() {
+    let dir = temp_dir("repeat");
+    let server = MockServer::start(1);
+    let base = server_base(&server);
+    install(&dir, "pets", Some(&base));
+
+    let body = b"{}";
+    let invoke = run_cli(
+        &dir,
+        &["pets", "pets", "get-pets", "--tag", "a", "--tag", "b"],
+        Some(body),
+    );
+    assert!(
+        invoke.status.success(),
+        "{}",
+        String::from_utf8_lossy(&invoke.stderr)
+    );
+    let sent = request_text(&server.request(0));
+    assert!(sent.starts_with("GET /pets?tag=a&tag=b HTTP/1.1"), "{sent}");
+
+    server.handle.join().unwrap();
+}
+
+#[test]
+fn post_with_body_reaches_endpoint() {
+    let dir = temp_dir("post");
+    let server = MockServer::start(1);
+    let base = server_base(&server);
+    install(&dir, "pets", Some(&base));
+
+    let body = b"{\"name\":\"rex\"}";
+    let invoke = run_cli(&dir, &["pets", "pets", "create-pet"], Some(body));
+    assert!(
+        invoke.status.success(),
+        "{}",
+        String::from_utf8_lossy(&invoke.stderr)
+    );
+    assert_eq!(invoke.stdout, b"{\"id\":7}");
+    let stderr = String::from_utf8_lossy(&invoke.stderr);
+    assert!(stderr.contains("HTTP/1.1 201"), "{stderr}");
+    let sent = request_text(&server.request(0));
+    assert!(sent.starts_with("POST /pets HTTP/1.1"), "{sent}");
+    assert!(sent.ends_with("{\"name\":\"rex\"}"), "{sent}");
+
+    server.handle.join().unwrap();
+}
+
+#[test]
 fn non_2xx_exits_1_with_status_on_stderr() {
     let dir = temp_dir("notfound");
     let server = MockServer::start(1);
-    let spec = dir.join("spec.json");
-    fs::write(&spec, FIXTURE).unwrap();
-    let base = format!("http://{}", server.addr);
-    run_cli(
-        &dir,
-        &[
-            "install",
-            "pets",
-            spec.to_str().unwrap(),
-            "--base-url",
-            &base,
-        ],
-        None,
-    );
+    let base = server_base(&server);
+    install(&dir, "pets", Some(&base));
 
     let invoke = run_cli(&dir, &["pets", "pets", "get-pet", "--pet-id", "999"], None);
     assert!(!invoke.status.success());
@@ -257,20 +130,8 @@ fn non_2xx_exits_1_with_status_on_stderr() {
 fn response_body_reaches_stdout_binary_safe() {
     let dir = temp_dir("binary");
     let server = MockServer::start(1);
-    let spec = dir.join("spec.json");
-    fs::write(&spec, FIXTURE).unwrap();
-    let base = format!("http://{}", server.addr);
-    run_cli(
-        &dir,
-        &[
-            "install",
-            "pets",
-            spec.to_str().unwrap(),
-            "--base-url",
-            &base,
-        ],
-        None,
-    );
+    let base = server_base(&server);
+    install(&dir, "pets", Some(&base));
 
     let invoke = run_cli(&dir, &["pets", "pets", "get-binary"], None);
     assert!(
@@ -287,33 +148,34 @@ fn response_body_reaches_stdout_binary_safe() {
 }
 
 #[test]
-fn unknown_command_group_is_an_error() {
-    let dir = temp_dir("unknown");
-    let spec = dir.join("spec.json");
-    fs::write(&spec, FIXTURE).unwrap();
-    run_cli(
-        &dir,
-        &[
-            "install",
-            "pets",
-            spec.to_str().unwrap(),
-            "--base-url",
-            "http://127.0.0.1:9",
-        ],
-        None,
-    );
+fn unknown_command_group_is_a_clap_error() {
+    let dir = temp_dir("unknown-group");
+    install(&dir, "pets", None);
 
-    let invoke = run_cli(&dir, &["pets", "store", "get-pets"], None);
+    let invoke = run_cli(&dir, &["pets", "nosuch", "get-pets"], None);
     assert!(!invoke.status.success());
+    assert_eq!(invoke.status.code(), Some(2));
     let stderr = String::from_utf8_lossy(&invoke.stderr);
-    assert!(stderr.contains("store"), "{stderr}");
+    assert!(stderr.contains("nosuch"), "{stderr}");
+}
+
+#[test]
+fn unknown_command_is_a_clap_error() {
+    let dir = temp_dir("unknown-cmd");
+    install(&dir, "pets", None);
+
+    let invoke = run_cli(&dir, &["pets", "pets", "nosuch"], None);
+    assert!(!invoke.status.success());
+    assert_eq!(invoke.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&invoke.stderr);
+    assert!(stderr.contains("nosuch"), "{stderr}");
+    assert!(stderr.contains("pets"), "{stderr}");
 }
 
 #[test]
 fn corrupt_stored_model_is_not_not_found() {
     let dir = temp_dir("corrupt");
-    fs::create_dir_all(&dir).unwrap();
-    fs::write(dir.join("pets.json"), b"not json").unwrap();
+    std::fs::write(dir.join("pets.json"), b"not json").unwrap();
 
     let invoke = run_cli(&dir, &["pets", "pets", "get-pets"], None);
     assert!(!invoke.status.success());

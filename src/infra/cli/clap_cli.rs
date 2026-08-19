@@ -4,8 +4,9 @@ use std::collections::HashMap;
 use std::io::{IsTerminal, Read, Write};
 use std::process::ExitCode;
 
-use clap::{Arg, ArgAction, Args, Command, CommandFactory, Parser, Subcommand};
+use clap::{Arg, ArgAction, Args, Command, Parser, Subcommand};
 
+use crate::application::describe::{BodyHelp, CommandHelp, DescribeService, GroupHelp, ParamHelp};
 use crate::application::invoke_operation::InvokeOperationService;
 use crate::application::learn_api::LearnApiService;
 use crate::domain::errors::DomainError;
@@ -42,49 +43,96 @@ pub struct InstallArgs {
     pub base_url: Option<String>,
 }
 
-/// Static command tree for top-level help and tests.
-#[allow(dead_code)]
-pub fn build_static_command() -> clap::Command {
-    Cli::command()
-}
-
 /// Builds a dynamic clap tree for an installed model: `<group>` subcommands
 /// each containing `<command>` subcommands with per-parameter `--long` args.
+/// Help text comes from the `DescribeService` use case so that every level of
+/// `--help` renders useful, spec-derived information.
 pub fn build_api_command(model: &ApiModel) -> Command {
+    let help = DescribeService::describe(model);
     let mut top = Command::new("clining")
-        .about("Invoke a command from an installed API")
+        .about(format!("Commands for API '{}'", help.name))
         .subcommand_required(true);
-    for group in &model.operation_groups {
-        let mut group_cmd = Command::new(group.name.clone()).subcommand_required(true);
-        for operation in &group.operations {
+    for group in &help.groups {
+        let mut group_cmd = Command::new(group.name.clone())
+            .subcommand_required(true)
+            .about(group_about(group));
+        for operation in &group.commands {
             let mut command_cmd = Command::new(operation.name.clone());
             if let Some(summary) = &operation.summary {
                 command_cmd = command_cmd.about(summary);
             }
             for param in &operation.path_params {
                 command_cmd = command_cmd.arg(
-                    Arg::new(param.cli_name.clone())
-                        .long(param.cli_name.clone())
+                    Arg::new(param.canonical_name.clone())
+                        .long(param.canonical_name.clone())
                         .value_name(param.name.clone())
-                        .required(true),
+                        .required(true)
+                        .help(param_help_text(param)),
                 );
             }
             for param in &operation.query_params {
-                let mut arg = Arg::new(param.cli_name.clone())
-                    .long(param.cli_name.clone())
+                let mut arg = Arg::new(param.canonical_name.clone())
+                    .long(param.canonical_name.clone())
                     .value_name(param.name.clone())
                     .action(ArgAction::Append)
-                    .num_args(1..);
+                    .num_args(1..)
+                    .help(param_help_text(param));
                 if param.required {
                     arg = arg.required(true);
                 }
                 command_cmd = command_cmd.arg(arg);
             }
+            command_cmd = command_cmd.after_help(command_footer(operation));
             group_cmd = group_cmd.subcommand(command_cmd);
         }
         top = top.subcommand(group_cmd);
     }
     top
+}
+
+/// Help text for a group subcommand: the tag description when present, else a
+/// command-count summary.
+fn group_about(group: &GroupHelp) -> String {
+    match &group.description {
+        Some(description) => description.clone(),
+        None => format!("{} commands", group.commands.len()),
+    }
+}
+
+/// Help text for a parameter argument: its description plus a required marker.
+fn param_help_text(param: &ParamHelp) -> String {
+    let mut text = param.description.clone().unwrap_or_default();
+    if param.required {
+        if !text.is_empty() {
+            text.push(' ');
+        }
+        text.push_str("[required]");
+    }
+    text
+}
+
+/// Footer shown under a command's `--help`: the request line and, when the
+/// operation declares a body, its content type, requiredness, and schema
+/// summary.
+fn command_footer(command: &CommandHelp) -> String {
+    let mut text = format!("Request: {} {}", command.method.as_str(), command.path);
+    if let Some(body) = &command.body {
+        text.push_str(&format!(
+            "\nBody: {} ({})",
+            body.content_type,
+            body_requiredness(body)
+        ));
+        text.push_str(&format!(", schema: {}\n", body.schema_summary));
+    }
+    text
+}
+
+fn body_requiredness(body: &BodyHelp) -> &'static str {
+    if body.required {
+        "required"
+    } else {
+        "optional"
+    }
 }
 
 /// Top-level dispatch decision based on the first positional argument.
@@ -94,6 +142,8 @@ enum Action {
     Static(Vec<String>),
 }
 
+/// Dispatches the CLI arguments to the appropriate action: `install` subcommand,
+/// dynamic per-API command tree, or static help/test tree.
 fn dispatch(argv: &[String]) -> Action {
     match argv.get(1).map(String::as_str) {
         Some("install") => Action::Install(argv.to_vec()),
@@ -178,13 +228,18 @@ where
         let model = match self.store.load_by_name(api_name) {
             Ok(model) => model,
             Err(err) => {
-                eprintln!("error: {err}");
+                match err {
+                    DomainError::NotFound { .. } => eprintln!(
+                        "error: {err}; install it first with 'clining install <name> <spec>'"
+                    ),
+                    _ => eprintln!("error: {err}"),
+                }
                 return ExitCode::FAILURE;
             }
         };
         // The second positional argument is the command group, and the third is the command.
         let mut tree_args = Vec::with_capacity(args.len().saturating_sub(1));
-        tree_args.push(args[0].clone());
+        tree_args.push(args[1].clone());
         tree_args.extend_from_slice(&args[2..]);
         let matches = match build_api_command(&model).try_get_matches_from(&tree_args) {
             Ok(matches) => matches,
@@ -238,19 +293,14 @@ where
         let mut params: HashMap<String, Vec<String>> = HashMap::new();
         for param in operation.path_params.iter().chain(&operation.query_params) {
             if let Some(values) =
-                command_matches.and_then(|m| m.get_many::<String>(&param.cli_name))
+                command_matches.and_then(|m| m.get_many::<String>(&param.canonical_name))
             {
-                params.insert(param.cli_name.clone(), values.cloned().collect());
+                params.insert(param.canonical_name.clone(), values.cloned().collect());
             }
         }
         // Read the request body from stdin, if any.
         let body = read_stdin_body();
         // Invoke the command using the service, passing the resolved request.
-        eprintln!(
-            "Invoking {group_name}/{command_name} with params: {:?}, body length: {}",
-            params,
-            body.as_ref().map_or(0, Vec::len)
-        );
         let invocation = ApiInvocationRequest::new(model.base_url.clone(), operation, params, body);
         let service = InvokeOperationService::new(&self.invoker);
         let response = match service.invoke(&invocation) {
@@ -272,13 +322,8 @@ where
             let _ = writeln!(stderr, "{name}: {value}");
         }
         let _ = stderr.flush();
-        // Write the response body to stdout.
-        if let Err(err) = std::io::stdout().write_all(&response.body) {
-            eprintln!("error: failed to write response body: {err}");
-            return ExitCode::FAILURE;
-        }
-        if let Err(err) = std::io::stdout().flush() {
-            eprintln!("error: failed to flush stdout: {err}");
+        // Write the response body to stdout byte-exact.
+        if !write_response_body(&response.body) {
             return ExitCode::FAILURE;
         }
         // Return success for 2xx responses, failure otherwise.
@@ -335,6 +380,20 @@ fn unknown_operation(command_name: &str, group: &ApiOperationGroup) -> DomainErr
     }
 }
 
+/// Writes response bytes to stdout byte-exact. A closed downstream pipe is
+/// tolerated (standard CLI behavior), matching SIGPIPE-safe semantics.
+fn write_response_body(bytes: &[u8]) -> bool {
+    let mut out = std::io::stdout().lock();
+    match out.write_all(bytes).and_then(|()| out.flush()) {
+        Ok(()) => true,
+        Err(err) if err.kind() == std::io::ErrorKind::BrokenPipe => true,
+        Err(err) => {
+            eprintln!("error: failed to write response body: {err}");
+            false
+        }
+    }
+}
+
 /// Returns the request body read from stdin, or None if stdin is empty or unreadable.
 fn read_stdin_body() -> Option<Vec<u8>> {
     if std::io::stdin().is_terminal() {
@@ -376,7 +435,9 @@ fn status_text(status: u16) -> &'static str {
 mod tests {
     use super::*;
 
-    use crate::domain::model::{ApiOperation, ApiOperationGroup, HttpMethod, ModelVersion, Param};
+    use crate::domain::model::{
+        ApiOperation, ApiOperationGroup, BodySpec, HttpMethod, ModelVersion, Param,
+    };
 
     fn sample_model() -> ApiModel {
         ApiModel {
@@ -385,6 +446,7 @@ mod tests {
             version: ModelVersion::V1,
             operation_groups: vec![ApiOperationGroup {
                 name: "pets".to_owned(),
+                description: Some("Everything about your pets".to_owned()),
                 operations: vec![ApiOperation {
                     name: "get-pet".to_owned(),
                     summary: Some("Get a pet".to_owned()),
@@ -392,15 +454,21 @@ mod tests {
                     path: "/pets/{petId}".to_owned(),
                     path_params: vec![Param {
                         name: "petId".to_owned(),
-                        cli_name: "pet-id".to_owned(),
+                        canonical_name: "pet-id".to_owned(),
                         required: true,
+                        description: Some("Numeric id of the pet".to_owned()),
                     }],
                     query_params: vec![Param {
                         name: "status".to_owned(),
-                        cli_name: "status".to_owned(),
+                        canonical_name: "status".to_owned(),
                         required: false,
+                        description: None,
                     }],
-                    request_body: None,
+                    request_body: Some(BodySpec {
+                        required: true,
+                        content_type: "application/json".to_owned(),
+                        schema_json: Some(r#"{"type":"object"}"#.to_owned()),
+                    }),
                 }],
             }],
         }
@@ -430,14 +498,6 @@ mod tests {
                 .unwrap()
                 .command;
         assert_eq!(args.base_url, None);
-    }
-
-    #[test]
-    fn static_command_renders_help() {
-        let mut cmd = build_static_command();
-        cmd.clone().debug_assert();
-        let help = cmd.render_help().to_string();
-        assert!(help.contains("install"));
     }
 
     #[test]
@@ -484,6 +544,81 @@ mod tests {
             .try_get_matches_from(["clining", "pets", "get-pet"])
             .unwrap_err();
         assert_eq!(err.exit_code(), 2);
+    }
+
+    #[test]
+    fn api_help_lists_groups_with_descriptions() {
+        let mut cmd = build_api_command(&sample_model());
+        cmd.clone().debug_assert();
+        let help = cmd.render_help().to_string();
+        assert!(help.contains("pets"), "{help}");
+        assert!(help.contains("Everything about your pets"), "{help}");
+        assert!(help.contains("Commands for API 'pets'"), "{help}");
+    }
+
+    #[test]
+    fn group_help_lists_commands_with_summaries() {
+        let cmd = build_api_command(&sample_model());
+        let mut group = cmd.find_subcommand("pets").unwrap().clone();
+        group.clone().debug_assert();
+        let help = group.render_help().to_string();
+        assert!(help.contains("get-pet"), "{help}");
+        assert!(help.contains("Get a pet"), "{help}");
+    }
+
+    #[test]
+    fn command_help_shows_params_and_body_schema() {
+        let cmd = build_api_command(&sample_model());
+        let mut command = cmd
+            .find_subcommand("pets")
+            .unwrap()
+            .find_subcommand("get-pet")
+            .unwrap()
+            .clone();
+        command.clone().debug_assert();
+        let help = command.render_help().to_string();
+        assert!(help.contains("--pet-id"), "{help}");
+        assert!(help.contains("[required]"), "{help}");
+        assert!(help.contains("Request: GET /pets/{petId}"), "{help}");
+        assert!(help.contains("application/json"), "{help}");
+        assert!(help.contains("required"), "{help}");
+        assert!(help.contains("schema: object"), "{help}");
+    }
+
+    #[test]
+    fn param_help_text_marks_required() {
+        let required = ParamHelp {
+            name: "petId".to_owned(),
+            canonical_name: "pet-id".to_owned(),
+            required: true,
+            description: Some("Numeric id".to_owned()),
+        };
+        assert_eq!(param_help_text(&required), "Numeric id [required]");
+        let optional = ParamHelp {
+            name: "status".to_owned(),
+            canonical_name: "status".to_owned(),
+            required: false,
+            description: None,
+        };
+        assert_eq!(param_help_text(&optional), "");
+    }
+
+    #[test]
+    fn command_footer_includes_request_and_body() {
+        let cmd = build_api_command(&sample_model());
+        let command = cmd
+            .find_subcommand("pets")
+            .unwrap()
+            .find_subcommand("get-pet")
+            .unwrap()
+            .clone();
+        let footer = command.get_after_help().map(|s| s.to_string());
+        let footer = footer.unwrap();
+        assert!(footer.contains("Request: GET /pets/{petId}"), "{footer}");
+        assert!(
+            footer.contains("Body: application/json (required), schema: object"),
+            "{footer}"
+        );
     }
 
     #[test]

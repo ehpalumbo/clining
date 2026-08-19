@@ -84,7 +84,7 @@ fn build_url(
     let mut path = operation.path.clone();
     for param in &operation.path_params {
         let placeholder = format!("{{{}}}", param.name);
-        match values.get(&param.cli_name).and_then(|v| v.first()) {
+        match values.get(&param.canonical_name).and_then(|v| v.first()) {
             Some(value) => {
                 path = path.replace(&placeholder, &encode(value));
             }
@@ -92,7 +92,7 @@ fn build_url(
                 return Err(DomainError::Parameter {
                     message: format!(
                         "missing required path parameter '{}' (--{})",
-                        param.name, param.cli_name
+                        param.name, param.canonical_name
                     ),
                 });
             }
@@ -104,7 +104,7 @@ fn build_url(
     // Serialize query parameters
     let mut query: Vec<String> = Vec::new();
     for param in &operation.query_params {
-        match values.get(&param.cli_name) {
+        match values.get(&param.canonical_name) {
             Some(vals) => {
                 for value in vals {
                     query.push(format!("{}={}", encode(&param.name), encode(value)));
@@ -114,7 +114,7 @@ fn build_url(
                 return Err(DomainError::Parameter {
                     message: format!(
                         "missing required query parameter '{}' (--{})",
-                        param.name, param.cli_name
+                        param.name, param.canonical_name
                     ),
                 });
             }
@@ -163,16 +163,18 @@ mod tests {
     fn pet_id() -> Param {
         Param {
             name: "petId".to_owned(),
-            cli_name: "pet-id".to_owned(),
+            canonical_name: "pet-id".to_owned(),
             required: true,
+            description: None,
         }
     }
 
     fn status() -> Param {
         Param {
             name: "status".to_owned(),
-            cli_name: "status".to_owned(),
+            canonical_name: "status".to_owned(),
             required: false,
+            description: None,
         }
     }
 
@@ -244,8 +246,9 @@ mod tests {
     fn missing_required_query_param_is_error() {
         let required = Param {
             name: "limit".to_owned(),
-            cli_name: "limit".to_owned(),
+            canonical_name: "limit".to_owned(),
             required: true,
+            description: None,
         };
         let operation = operation_with("/pets", vec![], vec![required], None);
         let err = build_request("https://api.example.com", &operation, &HashMap::new(), None)
@@ -257,8 +260,9 @@ mod tests {
     fn optional_path_param_without_value_substitutes_empty() {
         let optional = Param {
             name: "petId".to_owned(),
-            cli_name: "pet-id".to_owned(),
+            canonical_name: "pet-id".to_owned(),
             required: false,
+            description: None,
         };
         let operation = operation_with("/pets/{petId}", vec![optional], vec![], None);
         let req =

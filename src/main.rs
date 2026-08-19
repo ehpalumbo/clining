@@ -15,24 +15,34 @@ use infra::source::loader::SourceLoader;
 use infra::storage::json_file_store::JsonFileStore;
 
 fn main() -> ExitCode {
-    let store = JsonFileStore::new(model_store_root());
+    let store_root = match model_store_root() {
+        Some(path) => path,
+        None => {
+            eprintln!(
+                "fatal: Could not determine model store directory. Please set the CLINING_DIR environment variable or ensure that the HOME environment variable is set."
+            );
+            return ExitCode::FAILURE;
+        }
+    };
+    let store = JsonFileStore::new(store_root);
     let learn = LearnApiService::new(SourceLoader, Parser, &store);
     let invoker = match ReqwestHttpClient::new() {
         Ok(client) => client,
-        Err(err) => {
-            eprintln!("error: {err}");
+        Err(e) => {
+            eprintln!("fatal: Failed to initialize HTTP client: {e}");
             return ExitCode::FAILURE;
         }
     };
     CliApp::new(learn, &store, invoker).run()
 }
 
-fn model_store_root() -> PathBuf {
+/// Returns the path to the model store directory, or `None` if it cannot be determined.
+fn model_store_root() -> Option<PathBuf> {
     if let Some(dir) = std::env::var_os("CLINING_DIR") {
-        return PathBuf::from(dir);
+        return Some(PathBuf::from(dir));
     }
     if let Some(home) = std::env::var_os("HOME") {
-        return PathBuf::from(home).join(".clining");
+        return Some(PathBuf::from(home).join(".clining"));
     }
-    PathBuf::from(".clining")
+    None
 }

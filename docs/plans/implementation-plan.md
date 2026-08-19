@@ -29,8 +29,8 @@ One commit per phase, plus an initial documentation commit containing this plan.
 | --- | --- | --- | --- |
 | 1 | Toolchain & onion scaffolding — lint-clean crate skeleton | **Completed** | [phase-1-scaffolding.md](phases/phase-1-scaffolding.md) |
 | 2 | "Learn" slice — model, OpenAPI parser, store, source loader, `install` | **Completed** | [phase-2-learn.md](phases/phase-2-learn.md) |
-| 3 | "Invoke" slice — request builder, HTTP adapter, dynamic CLI, streaming | Planned | [phase-3-invoke.md](phases/phase-3-invoke.md) |
-| 4 | Discovery polish & hardening — help, error UX, E2E tests, README/Makefile | Planned | [phase-4-polish.md](phases/phase-4-polish.md) |
+| 3 | "Invoke" slice — request builder, HTTP adapter, dynamic CLI, streaming | **Completed** | [phase-3-invoke.md](phases/phase-3-invoke.md) |
+| 4 | Discovery polish & hardening — help, error UX, E2E tests, README/Makefile | **Completed** | [phase-4-polish.md](phases/phase-4-polish.md) |
 
 Status values: **Planned** → **In Progress** → **Completed**.
 
@@ -42,9 +42,9 @@ Status values: **Planned** → **In Progress** → **Completed**.
 
 ## Definition of Done (whole feature)
 
-- [ ] `clining install` persists a correct `ApiModel` from file or URI, honoring `--base-url`.
-- [ ] `clining <name> <group> <command> --param v < body` executes the request; body → stdout byte-exact, status line + headers → stderr; exit 0/1 per status.
-- [ ] Help renders at every level with parameters and body schema hints.
-- [ ] All unit + integration tests pass; `cargo clippy -- -D warnings` clean; formatted.
-- [ ] README + Makefile present; onion layering (domain ← application ← infra) enforced.
-- [ ] Requirements FR-1..FR-5 satisfied per the traceability table in the spec.
+- [x] `clining install` persists a correct `ApiModel` from file or URI, honoring `--base-url`.
+- [x] `clining <name> <group> <command> --param v < body` executes the request; body → stdout byte-exact, status line + headers → stderr; exit 0/1 per status.
+- [x] Help renders at every level with parameters and body schema hints.
+- [x] All unit + integration tests pass; `cargo clippy -- -D warnings` clean; formatted.
+- [x] README + Makefile present; onion layering (domain ← application ← infra) enforced.
+- [x] Requirements FR-1..FR-5 satisfied per the traceability table in the spec.

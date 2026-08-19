@@ -1,0 +1,75 @@
+{
+  "openapi": "3.0.0",
+  "info": { "title": "Petstore", "version": "1.0.0" },
+  "servers": [{ "url": "https://api.example.com/v1" }],
+  "tags": [
+    { "name": "pets", "description": "Everything about your pets" },
+    { "name": "store", "description": "Access to store orders" }
+  ],
+  "paths": {
+    "/pets": {
+      "get": {
+        "operationId": "getPets",
+        "summary": "List pets",
+        "description": "Returns all pets, optionally filtered",
+        "tags": ["pets"],
+        "parameters": [
+          { "name": "status", "in": "query", "description": "Filter by status" },
+          { "name": "tag", "in": "query", "description": "Filter by tag (repeatable)" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "type": "object" } }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createPet",
+        "summary": "Create a pet",
+        "tags": ["pets"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "type": "object" } }
+          }
+        }
+      }
+    },
+    "/pets/{petId}": {
+      "get": {
+        "operationId": "getPet",
+        "summary": "Get a pet by id",
+        "tags": ["pets"],
+        "parameters": [
+          { "name": "petId", "in": "path", "required": true, "description": "Numeric id of the pet" }
+        ]
+      }
+    },
+    "/store/orders": {
+      "post": {
+        "operationId": "placeOrder",
+        "summary": "Place an order",
+        "tags": ["store"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/Order" } }
+          }
+        }
+      }
+    },
+    "/ping": {
+      "get": {
+        "summary": "Health check"
+      }
+    },
+    "/binary": {
+      "get": {
+        "operationId": "getBinary",
+        "summary": "Fetch a binary blob",
+        "tags": ["pets"]
+      }
+    }
+  }
+}

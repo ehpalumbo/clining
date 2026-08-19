@@ -86,6 +86,7 @@ mod tests {
             version: ModelVersion::V1,
             operation_groups: vec![ApiOperationGroup {
                 name: "default".to_owned(),
+                description: None,
                 operations: vec![],
             }],
         }

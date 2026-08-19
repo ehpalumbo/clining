@@ -57,6 +57,7 @@ mod tests {
             version: ModelVersion::V1,
             operation_groups: vec![ApiOperationGroup {
                 name: "pets".to_owned(),
+                description: None,
                 operations: vec![ApiOperation {
                     name: "get-pet".to_owned(),
                     summary: None,
@@ -64,13 +65,15 @@ mod tests {
                     path: "/pets/{petId}".to_owned(),
                     path_params: vec![Param {
                         name: "petId".to_owned(),
-                        cli_name: "pet-id".to_owned(),
+                        canonical_name: "pet-id".to_owned(),
                         required: true,
+                        description: None,
                     }],
                     query_params: vec![Param {
                         name: "status".to_owned(),
-                        cli_name: "status".to_owned(),
+                        canonical_name: "status".to_owned(),
                         required: false,
+                        description: None,
                     }],
                     request_body: None,
                 }],

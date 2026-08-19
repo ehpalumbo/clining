@@ -9,6 +9,7 @@ pub struct OpenApi30Spec {
     pub info: Option<Info>,
     pub servers: Option<Vec<Server>>,
     pub paths: BTreeMap<String, PathItem>,
+    pub tags: Option<Vec<Tag>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -19,6 +20,12 @@ pub struct Info {
 #[derive(Debug, Deserialize)]
 pub struct Server {
     pub url: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Tag {
+    pub name: String,
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -51,6 +58,7 @@ pub struct Parameter {
     #[serde(rename = "in")]
     pub location: String,
     pub required: Option<bool>,
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

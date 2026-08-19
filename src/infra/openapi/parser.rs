@@ -1,6 +1,6 @@
 //! Maps an OpenAPI 3.0 spec into the domain `ApiModel`.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use super::spec::{MediaType, OpenApi30Spec, Operation, Parameter, PathItem, RequestBody};
 use crate::domain::command_name::{cli_name, command_name, disambiguate};
@@ -63,6 +63,14 @@ impl Parser {
             .and_then(|i| i.title.clone())
             .unwrap_or_default();
 
+        let tag_descriptions: HashMap<&str, &str> = spec
+            .tags
+            .as_ref()
+            .into_iter()
+            .flatten()
+            .filter_map(|t| t.description.as_deref().map(|d| (t.name.as_str(), d)))
+            .collect();
+
         let mut operation_groups: Vec<ApiOperationGroup> = Vec::new();
         let mut operation_group_index: BTreeMap<String, usize> = BTreeMap::new();
         for (path, item) in &spec.paths {
@@ -79,6 +87,9 @@ impl Parser {
                         let i = operation_groups.len();
                         operation_groups.push(ApiOperationGroup {
                             name: group_name.clone(),
+                            description: tag_descriptions
+                                .get(group_name.as_str())
+                                .map(|d| (*d).to_owned()),
                             operations: Vec::new(),
                         });
                         operation_group_index.insert(group_name.clone(), i);
@@ -194,8 +205,9 @@ impl Parser {
     fn to_param(p: &Parameter) -> Param {
         Param {
             name: p.name.clone(),
-            cli_name: cli_name(&p.name),
+            canonical_name: cli_name(&p.name),
             required: p.required.unwrap_or(false),
+            description: p.description.clone(),
         }
     }
 
@@ -221,6 +233,10 @@ mod tests {
         "openapi": "3.0.0",
         "info": { "title": "Petstore", "version": "1.0.0" },
         "servers": [{ "url": "https://api.example.com/v1" }],
+        "tags": [
+            { "name": "pets", "description": "Everything about your pets" },
+            { "name": "store", "description": "Access to store orders" }
+        ],
         "paths": {
             "/pets": {
                 "parameters": [
@@ -250,7 +266,7 @@ mod tests {
                 "get": {
                     "summary": "Get a pet by id",
                     "parameters": [
-                        { "name": "petId", "in": "path", "required": true },
+                        { "name": "petId", "in": "path", "required": true, "description": "The numeric pet id" },
                         { "name": "X-API-Key", "in": "header" }
                     ]
                 }
@@ -287,6 +303,10 @@ mod tests {
 
         let pets = &model.operation_groups[0];
         assert_eq!(pets.name, "pets");
+        assert_eq!(
+            pets.description.as_deref(),
+            Some("Everything about your pets")
+        );
         let op_names: Vec<&str> = pets.operations.iter().map(|c| c.name.as_str()).collect();
         assert_eq!(op_names, vec!["list-pets", "create-pet"]);
     }
@@ -311,7 +331,7 @@ mod tests {
             !limit.required,
             "operation-level param overrides path-level"
         );
-        assert_eq!(limit.cli_name, "limit");
+        assert_eq!(limit.canonical_name, "limit");
 
         let create = &pets.operations[1];
         let query_names: Vec<&str> = create
@@ -350,8 +370,9 @@ mod tests {
         assert_eq!(get.path_params.len(), 1, "header params are dropped");
         let pet_id = &get.path_params[0];
         assert_eq!(pet_id.name, "petId");
-        assert_eq!(pet_id.cli_name, "pet-id");
+        assert_eq!(pet_id.canonical_name, "pet-id");
         assert!(pet_id.required);
+        assert_eq!(pet_id.description.as_deref(), Some("The numeric pet id"));
         assert!(get.request_body.is_none());
     }
 

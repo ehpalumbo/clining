@@ -25,6 +25,8 @@ pub struct ApiModel {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ApiOperationGroup {
     pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
     pub operations: Vec<ApiOperation>,
 }
 
@@ -44,8 +46,10 @@ pub struct ApiOperation {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Param {
     pub name: String,
-    pub cli_name: String,
+    pub canonical_name: String,
     pub required: bool,
+    #[serde(default)]
+    pub description: Option<String>,
 }
 
 /// Request body metadata; the raw schema is stored for help display only.

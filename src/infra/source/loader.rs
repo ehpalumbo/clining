@@ -13,14 +13,7 @@ impl SpecLoader for SourceLoader {
         if source.starts_with("http://") || source.starts_with("https://") {
             self.fetch(source)
         } else {
-            std::fs::read(source).map_err(|e| match e.kind() {
-                std::io::ErrorKind::NotFound => DomainError::Io {
-                    message: format!("spec file not found: {source}"),
-                },
-                _ => DomainError::Io {
-                    message: format!("failed to read spec source '{source}': {e}"),
-                },
-            })
+            self.read_local_file(source)
         }
     }
 }
@@ -48,6 +41,17 @@ impl SourceLoader {
             })?
             .to_vec();
         Ok(bytes)
+    }
+
+    fn read_local_file(&self, path: &str) -> Result<Vec<u8>, DomainError> {
+        std::fs::read(path).map_err(|e| match e.kind() {
+            std::io::ErrorKind::NotFound => DomainError::Io {
+                message: format!("spec file not found: {path}"),
+            },
+            _ => DomainError::Io {
+                message: format!("failed to read spec source '{path}': {e}"),
+            },
+        })
     }
 }
 
