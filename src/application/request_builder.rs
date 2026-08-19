@@ -2,17 +2,10 @@
 
 use std::collections::HashMap;
 
-use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
+use url::Url;
 
 use crate::domain::errors::DomainError;
 use crate::domain::model::{ApiOperation, HttpRequest};
-
-/// RFC 3986 unreserved characters: alphanumerics plus `-`, `.`, `_`, `~`.
-const UNRESERVED: &AsciiSet = &NON_ALPHANUMERIC
-    .remove(b'-')
-    .remove(b'.')
-    .remove(b'_')
-    .remove(b'~');
 
 /// Builds a fully-specified `HttpRequest` from an operation, supplied values,
 /// and an optional body. Values are keyed by the CLI parameter name
@@ -80,14 +73,15 @@ fn build_url(
     operation: &ApiOperation,
     values: &HashMap<String, Vec<String>>,
 ) -> Result<String, DomainError> {
+    let mut url = Url::parse(base_url).map_err(|e| DomainError::Parameter {
+        message: format!("invalid base URL '{base_url}': {e}"),
+    })?;
     // Substitute path parameters
-    let mut path = operation.path.clone();
+    let mut segments: Vec<String> = operation.path.split('/').map(str::to_owned).collect();
     for param in &operation.path_params {
         let placeholder = format!("{{{}}}", param.name);
-        match values.get(&param.canonical_name).and_then(|v| v.first()) {
-            Some(value) => {
-                path = path.replace(&placeholder, &encode(value));
-            }
+        let value = match values.get(&param.canonical_name).and_then(|v| v.first()) {
+            Some(value) => value,
             None if param.required => {
                 return Err(DomainError::Parameter {
                     message: format!(
@@ -96,18 +90,27 @@ fn build_url(
                     ),
                 });
             }
-            None => {
-                path = path.replace(&placeholder, "");
-            }
+            None => "",
+        };
+        for segment in &mut segments {
+            *segment = segment.replace(&placeholder, value);
         }
     }
+    // Remove any empty segments that may have resulted from optional parameters
+    url.path_segments_mut()
+        .map_err(|_| DomainError::Parameter {
+            message: format!("base URL '{base_url}' cannot hold a path"),
+        })?
+        .pop_if_empty()
+        .extend(segments.into_iter().skip_while(|s| s.is_empty()));
+
     // Serialize query parameters
-    let mut query: Vec<String> = Vec::new();
+    let mut pairs: Vec<(String, String)> = Vec::new();
     for param in &operation.query_params {
         match values.get(&param.canonical_name) {
             Some(vals) => {
                 for value in vals {
-                    query.push(format!("{}={}", encode(&param.name), encode(value)));
+                    pairs.push((param.name.clone(), value.clone()));
                 }
             }
             None if param.required => {
@@ -121,20 +124,14 @@ fn build_url(
             None => {}
         }
     }
-    // Construct the final URL
-    let base = base_url.trim_end_matches('/');
-    let path = path.trim_start_matches('/');
-    let mut url = format!("{base}/{path}");
-    if !query.is_empty() {
-        url.push('?');
-        url.push_str(&query.join("&"));
+    if !pairs.is_empty() {
+        let mut query = url.query_pairs_mut();
+        for (name, value) in &pairs {
+            query.append_pair(name, value);
+        }
     }
-    Ok(url)
-}
 
-/// Percent-encodes a string for use in a URL path or query parameter.
-fn encode(value: &str) -> String {
-    utf8_percent_encode(value, UNRESERVED).to_string()
+    Ok(url.to_string())
 }
 
 #[cfg(test)]
@@ -352,5 +349,13 @@ mod tests {
         )
         .unwrap();
         assert_eq!(req.body, None);
+    }
+
+    #[test]
+    fn invalid_base_url_is_parameter_error() {
+        let operation = operation_with("/pets", vec![], vec![], None);
+        let err = build_request("not a url", &operation, &HashMap::new(), None).unwrap_err();
+        assert!(matches!(err, DomainError::Parameter { .. }), "{err}");
+        assert!(err.to_string().contains("base URL"), "{err}");
     }
 }
