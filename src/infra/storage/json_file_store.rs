@@ -84,6 +84,7 @@ mod tests {
             name: name.to_owned(),
             base_url: "https://example.com".to_owned(),
             version: ModelVersion::V1,
+            schema_registry: std::collections::BTreeMap::new(),
             operation_groups: vec![ApiOperationGroup {
                 name: "default".to_owned(),
                 description: None,

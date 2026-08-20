@@ -1,6 +1,6 @@
 //! Persisted API model entities (Phase 2).
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use serde::{Deserialize, Serialize};
 
@@ -18,7 +18,16 @@ pub struct ApiModel {
     pub name: String,
     pub base_url: String,
     pub version: ModelVersion,
+    #[serde(default)]
+    pub schema_registry: BTreeMap<String, SchemaSpec>,
     pub operation_groups: Vec<ApiOperationGroup>,
+}
+
+impl ApiModel {
+    /// Returns the registry schema for the given ref id, if present.
+    pub fn schema_by_ref_id(&self, ref_id: &str) -> Option<&SchemaSpec> {
+        self.schema_registry.get(ref_id)
+    }
 }
 
 /// A named group of operations derived from an OpenAPI tag.
@@ -40,6 +49,8 @@ pub struct ApiOperation {
     pub path_params: Vec<Param>,
     pub query_params: Vec<Param>,
     pub request_body: Option<BodySpec>,
+    #[serde(default)]
+    pub responses: Vec<ResponseSpec>,
 }
 
 /// A path or query parameter, keeping both the original and CLI names.
@@ -52,12 +63,57 @@ pub struct Param {
     pub description: Option<String>,
 }
 
-/// Request body metadata; the raw schema is stored for help display only.
+/// Request body metadata; the typed schema is stored for help display only.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BodySpec {
     pub required: bool,
     pub content_type: String,
-    pub schema_json: Option<String>,
+    pub schema: Option<SchemaSpec>,
+}
+
+/// An operation response body captured by status code and content type.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResponseSpec {
+    pub status_code: String,
+    pub content_type: String,
+    pub schema: Option<SchemaSpec>,
+}
+
+/// A property of an object schema: its own schema plus requiredness and
+/// description derived from the surrounding object schema.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SchemaProperty {
+    pub schema: SchemaSpec,
+    pub required: bool,
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
+/// A typed OpenAPI schema. Local `#/components/schemas/...` references are
+/// stored as `Ref` pointing at the model's schema registry (never inlined);
+/// anything unrepresentable is preserved verbatim in `Unknown`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SchemaSpec {
+    Ref {
+        ref_id: String,
+    },
+    Object {
+        properties: BTreeMap<String, SchemaProperty>,
+    },
+    Array {
+        items: Option<Box<SchemaSpec>>,
+    },
+    Integer,
+    Number,
+    String,
+    Boolean,
+    Composite {
+        schemas: Vec<SchemaSpec>,
+    },
+    Unknown {
+        raw_json: String,
+    },
 }
 
 /// HTTP method of an operation.

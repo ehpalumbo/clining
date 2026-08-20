@@ -101,7 +101,7 @@ fn command_help_shows_required_marker_and_description() {
 }
 
 #[test]
-fn command_help_shows_reference_schema_summary() {
+fn command_help_shows_resolved_reference_schema() {
     let dir = temp_dir("help-ref");
     install(&dir, "pets", None);
 
@@ -112,9 +112,9 @@ fn command_help_shows_reference_schema_summary() {
         String::from_utf8_lossy(&out.stderr)
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(
-        stdout.contains("schema: {\"$ref\":\"#/components/schemas/Order\"}"),
-        "{stdout}"
-    );
     assert!(stdout.contains("application/json"), "{stdout}");
+    assert!(stdout.contains("schema: {\"properties\":"), "{stdout}");
+    assert!(stdout.contains("\"required\":true"), "{stdout}");
+    assert!(stdout.contains("\"description\":\"Order id\""), "{stdout}");
+    assert!(!stdout.contains("\"$ref\""), "{stdout}");
 }
