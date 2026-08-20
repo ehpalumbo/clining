@@ -80,7 +80,7 @@ fn command_help_shows_params_and_body_schema() {
     assert!(stdout.contains("Request: GET /pets"), "{stdout}");
     assert!(stdout.contains("application/json"), "{stdout}");
     assert!(stdout.contains("required"), "{stdout}");
-    assert!(stdout.contains("schema: object"), "{stdout}");
+    assert!(stdout.contains("schema: {\"type\":\"object\"}"), "{stdout}");
 }
 
 #[test]
@@ -112,6 +112,9 @@ fn command_help_shows_reference_schema_summary() {
         String::from_utf8_lossy(&out.stderr)
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(stdout.contains("schema: reference"), "{stdout}");
+    assert!(
+        stdout.contains("schema: {\"$ref\":\"#/components/schemas/Order\"}"),
+        "{stdout}"
+    );
     assert!(stdout.contains("application/json"), "{stdout}");
 }

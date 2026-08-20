@@ -36,7 +36,8 @@ Depends only on the domain. Orchestrates ports into user-facing flows:
 
 - **Learn API** — `SpecLoader` → `OpenApiParser` → `ApiStore.save`, with base-URL override handling.
 - **Invoke operation** — `ApiStore.load` → resolve group/operation → build request from params and body → `HttpInvoker.send`.
-- **Describe** — produce structured help data (groups, commands, parameters, body hints) from a model.
+
+The clap tree builder reads the domain model directly (groups, operations, parameters, body hints) to render help at every level.
 
 ### Infrastructure (adapters)
 

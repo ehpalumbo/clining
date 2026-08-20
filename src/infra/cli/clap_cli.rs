@@ -7,11 +7,12 @@ use std::process::ExitCode;
 
 use clap::{Arg, ArgAction, Command};
 
-use crate::application::describe::{BodyHelp, CommandHelp, DescribeService, GroupHelp, ParamHelp};
 use crate::application::invoke_operation::InvokeOperationService;
 use crate::application::learn_api::LearnApiService;
 use crate::domain::errors::DomainError;
-use crate::domain::model::{ApiInvocationRequest, ApiModel, ApiOperationGroup};
+use crate::domain::model::{
+    ApiInvocationRequest, ApiModel, ApiOperation, ApiOperationGroup, BodySpec, Param,
+};
 use crate::domain::ports::{ApiStore, HttpInvoker, OpenApiParser, SpecLoader};
 
 /// Builds the full CLI command tree: the `install` subcommand plus, when a
@@ -63,20 +64,18 @@ fn api_placeholder_command() -> Command {
 }
 
 /// Builds the dynamic per-API subcommand tree: `<group>` subcommands each
-/// containing `<command>` subcommands with per-parameter `--long` args. Help
-/// text comes from the `DescribeService` use case so that every level of
-/// `--help` renders useful, spec-derived information.
+/// containing `<command>` subcommands with per-parameter `--long` args.
+/// Every level of `--help` renders useful, spec-derived information.
 fn api_command(model: &ApiModel) -> Command {
-    let help = DescribeService::describe(model);
-    let mut api = Command::new(help.name.clone())
-        .about(format!("Commands for API '{}'", help.name))
+    let mut api = Command::new(model.name.clone())
+        .about(format!("Commands for API '{}'", model.name))
         .disable_help_subcommand(true)
         .subcommand_required(true);
-    for group in &help.groups {
+    for group in &model.operation_groups {
         let mut group_cmd = Command::new(group.name.clone())
             .subcommand_required(true)
             .about(group_about(group));
-        for operation in &group.commands {
+        for operation in &group.operations {
             let mut command_cmd = Command::new(operation.name.clone());
             if let Some(summary) = &operation.summary {
                 command_cmd = command_cmd.about(summary);
@@ -112,15 +111,15 @@ fn api_command(model: &ApiModel) -> Command {
 
 /// Help text for a group subcommand: the tag description when present, else a
 /// command-count summary.
-fn group_about(group: &GroupHelp) -> String {
+fn group_about(group: &ApiOperationGroup) -> String {
     match &group.description {
         Some(description) => description.clone(),
-        None => format!("{} commands", group.commands.len()),
+        None => format!("{} commands", group.operations.len()),
     }
 }
 
 /// Help text for a parameter argument: its description plus a required marker.
-fn param_help_text(param: &ParamHelp) -> String {
+fn param_help_text(param: &Param) -> String {
     let mut text = param.description.clone().unwrap_or_default();
     if param.required {
         if !text.is_empty() {
@@ -134,25 +133,35 @@ fn param_help_text(param: &ParamHelp) -> String {
 /// Footer shown under a command's `--help`: the request line and, when the
 /// operation declares a body, its content type, requiredness, and schema
 /// summary.
-fn command_footer(command: &CommandHelp) -> String {
+fn command_footer(command: &ApiOperation) -> String {
     let mut text = format!("Request: {} {}", command.method.as_str(), command.path);
-    if let Some(body) = &command.body {
+    if let Some(body) = &command.request_body {
         text.push_str(&format!(
             "\nBody: {} ({})",
             body.content_type,
             body_requiredness(body)
         ));
-        text.push_str(&format!(", schema: {}\n", body.schema_summary));
+        text.push_str(&format!(
+            ", schema: {}\n",
+            request_body_schema_summary(body)
+        ));
     }
     text
 }
 
-fn body_requiredness(body: &BodyHelp) -> &'static str {
+fn body_requiredness(body: &BodySpec) -> &'static str {
     if body.required {
         "required"
     } else {
         "optional"
     }
+}
+
+fn request_body_schema_summary(body: &BodySpec) -> String {
+    body.schema_json
+        .as_ref()
+        .map(|json| json.trim().to_string())
+        .unwrap_or_else(|| "unknown".to_string())
 }
 
 /// Top-level dispatch decision based on the first positional argument.
@@ -659,19 +668,19 @@ mod tests {
         assert!(help.contains("Request: GET /pets/{petId}"), "{help}");
         assert!(help.contains("application/json"), "{help}");
         assert!(help.contains("required"), "{help}");
-        assert!(help.contains("schema: object"), "{help}");
+        assert!(help.contains("schema: {\"type\":\"object\"}"), "{help}");
     }
 
     #[test]
     fn param_help_text_marks_required() {
-        let required = ParamHelp {
+        let required = Param {
             name: "petId".to_owned(),
             canonical_name: "pet-id".to_owned(),
             required: true,
             description: Some("Numeric id".to_owned()),
         };
         assert_eq!(param_help_text(&required), "Numeric id [required]");
-        let optional = ParamHelp {
+        let optional = Param {
             name: "status".to_owned(),
             canonical_name: "status".to_owned(),
             required: false,
@@ -695,7 +704,7 @@ mod tests {
         let footer = footer.unwrap();
         assert!(footer.contains("Request: GET /pets/{petId}"), "{footer}");
         assert!(
-            footer.contains("Body: application/json (required), schema: object"),
+            footer.contains("Body: application/json (required), schema: {\"type\":\"object\"}"),
             "{footer}"
         );
     }
