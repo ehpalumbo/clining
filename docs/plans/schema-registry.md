@@ -15,7 +15,7 @@ related:
 
 # Issue #1 — OpenAPI `$ref` resolution + request/response body schemas
 
-**Status:** In Progress
+**Status:** Implemented — ready for review (draft PR)
 
 ## Overview
 
@@ -60,9 +60,9 @@ Agreed design decisions:
   - `ApiOperation`: add `responses: Vec<ResponseSpec>`.
   - `ApiModel`: add `schema_registry: BTreeMap<String, SchemaSpec>`; add `impl ApiModel { pub fn schema_by_ref_id(&self, ref_id: &str) -> Option<&SchemaSpec> }`.
 - **Acceptance Criteria:**
-  - [ ] All new entities serialize/deserialize losslessly via serde_json.
-  - [ ] `schema_by_ref_id` returns the matching registry entry or `None`.
-  - [ ] Registry and `responses` deserialize as empty when absent (`#[serde(default)]` where needed).
+  - [x] All new entities serialize/deserialize losslessly via serde_json.
+  - [x] `schema_by_ref_id` returns the matching registry entry or `None`.
+  - [x] Registry and `responses` deserialize as empty when absent (`#[serde(default)]` where needed).
 
 ### 2. Extend the OpenAPI 3.0 spec subset
 
@@ -76,8 +76,8 @@ Agreed design decisions:
   - `Operation.responses: Option<BTreeMap<String, Response>>` (Option fields deserialize as `None` when missing).
   - `Response { content: Option<BTreeMap<String, MediaType>> }` (reuses existing `MediaType`; `description` not needed).
 - **Acceptance Criteria:**
-  - [ ] A spec with `components.schemas` and operation `responses` deserializes into the subset structs.
-  - [ ] Existing specs without `components` / `responses` still parse.
+  - [x] A spec with `components.schemas` and operation `responses` deserializes into the subset structs.
+  - [x] Existing specs without `components` / `responses` still parse.
 
 ### 3. Convert schemas and build the registry in the parser
 
@@ -99,12 +99,12 @@ Agreed design decisions:
   - `to_response_specs(responses) -> Vec<ResponseSpec>`: one per (status code, content type), schema via `parse_schema`.
   - Thread `schema_registry` and `responses` through `build_model` / `build_operation`.
 - **Acceptance Criteria:**
-  - [ ] Request-body `$ref` → `BodySpec.schema == Ref { ref_id }`; registry entry typed.
-  - [ ] Nested refs preserved as `Ref` (not inlined).
-  - [ ] Object properties map to `SchemaProperty` with required flag + description.
-  - [ ] Array/scalar conversions; `Composite` from allOf/oneOf/anyOf; `Unknown { raw_json }` for untyped and non-local refs.
-  - [ ] Cycle-safe: a self-referencing schema parses with `Ref` preserved (no recursion).
-  - [ ] Response schemas captured per (status, content-type) for both ref and inline schemas.
+  - [x] Request-body `$ref` → `BodySpec.schema == Ref { ref_id }`; registry entry typed.
+  - [x] Nested refs preserved as `Ref` (not inlined).
+  - [x] Object properties map to `SchemaProperty` with required flag + description.
+  - [x] Array/scalar conversions; `Composite` from allOf/oneOf/anyOf; `Unknown { raw_json }` for untyped and non-local refs.
+  - [x] Cycle-safe: a self-referencing schema parses with `Ref` preserved (no recursion).
+  - [x] Response schemas captured per (status, content-type) for both ref and inline schemas.
 
 ### 4. Render the resolved schema tree in the command footer
 
@@ -118,16 +118,17 @@ Agreed design decisions:
   - `render_body_schema(model, &body.schema) -> String`: `None` → `"unknown"`; else compact-serialize `render_schema`.
   - `render_schema(spec, model, seen: &mut Vec<String>) -> serde_json::Value` (path-stack cycle guard):
     - `Ref` → if `ref_id ∈ seen` or registry lookup misses, emit `{"$ref":"#/components/schemas/<id>"}`; else push id, render target, pop.
-    - `Object` → `{"type":"object","properties":{ name: render(prop.schema) (+ "description" when present) }}` plus `"required":[...]` reconstructed from `required == true` properties (only when non-empty).
+    - `Object` → `{"type":"object","properties":{ name: render(prop.schema) (+ "description" when present, + "required" boolean) }}`; `properties` omitted when empty so an inline empty object renders exactly `{"type":"object"}`.
     - `Array` → `{"type":"array"}` (+ `"items"` when present).
     - `Integer`/`Number`/`String`/`Boolean` → `{"type":"integer"}` etc.
     - `Composite` → `{"composite":[...]}`.
     - `Unknown { raw_json }` → the wrapped JSON embedded as-is (fallback `{}` if unparseable).
+  - Note: rendered JSON keys are alphabetically sorted (serde_json's default `BTreeMap`-backed `Map`).
 - **Acceptance Criteria:**
-  - [ ] A `Ref` body renders the fully-expanded registry tree (no raw `$ref` at the top level).
-  - [ ] Inline `{"type":"object"}` still renders `schema: {"type":"object"}`.
-  - [ ] Cyclic schemas terminate with a `$ref` marker at the cycle point.
-  - [ ] `Unknown` renders its wrapped raw JSON.
+  - [x] A `Ref` body renders the fully-expanded registry tree (no raw `$ref` at the top level).
+  - [x] Inline `{"type":"object"}` still renders `schema: {"type":"object"}`.
+  - [x] Cyclic schemas terminate with a `$ref` marker at the cycle point.
+  - [x] `Unknown` renders its wrapped raw JSON.
 
 ### 5. Update model-construction touchpoints
 
@@ -144,7 +145,7 @@ Agreed design decisions:
   - `request_builder.rs` `BodySpec` literals: `schema: None` (3 sites).
   - `clap_cli.rs` `sample_model` body uses `SchemaSpec::Object { properties: BTreeMap::new() }` so it still renders `schema: {"type":"object"}`.
 - **Acceptance Criteria:**
-  - [ ] All crates compile with the new model fields.
+  - [x] All crates compile with the new model fields.
 
 ### 6. Update fixture and tests
 
@@ -157,8 +158,8 @@ Agreed design decisions:
   - Fixture: add `components.schemas.Order` (object, `id`/`petId`/`quantity` integer properties, `required: ["id"]`, a `description` on one property); add `responses`: `placeOrder` `200` → `application/json` `$ref Order`; `createPet` `200` → inline `{"type":"object"}`.
   - `tests/help.rs`: replace `command_help_shows_reference_schema_summary` with an assertion that `place-order --help` shows the expanded tree (including `"required"` / `"description"`) and does **not** contain `"$ref"`. Keep the inline-object assertion (`get-pets` renders `schema: {"type":"object"}`).
 - **Acceptance Criteria:**
-  - [ ] E2E help shows the resolved JSON tree for the `$ref` request body.
-  - [ ] Inline body help output unchanged.
+  - [x] E2E help shows the resolved JSON tree for the `$ref` request body.
+  - [x] Inline body help output unchanged.
 
 ## Verification Plan
 
@@ -168,9 +169,9 @@ Agreed design decisions:
 
 ## Definition of Done
 
-- [ ] Parser unit tests plus the end-to-end fixture exercise `$ref` request and response bodies.
-- [ ] Stored `ApiModel` carries a schema registry separate from operations; operation request/response body specs reference it by ref ID.
-- [ ] Response body schemas stored per operation (status code + content type).
-- [ ] `--help` shows the resolved schema tree instead of the raw `$ref`.
-- [ ] Non-reference schemas stored typed/inline (not raw strings).
-- [ ] Clippy-clean, formatted, all tests pass.
+- [x] Parser unit tests plus the end-to-end fixture exercise `$ref` request and response bodies.
+- [x] Stored `ApiModel` carries a schema registry separate from operations; operation request/response body specs reference it by ref ID.
+- [x] Response body schemas stored per operation (status code + content type).
+- [x] `--help` shows the resolved schema tree instead of the raw `$ref`.
+- [x] Non-reference schemas stored typed/inline (not raw strings).
+- [x] Clippy-clean, formatted, all tests pass.
