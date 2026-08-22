@@ -55,6 +55,7 @@ mod tests {
             name: "pets".to_owned(),
             base_url: "https://api.example.com/v1".to_owned(),
             version: ModelVersion::V1,
+            schema_registry: std::collections::BTreeMap::new(),
             operation_groups: vec![ApiOperationGroup {
                 name: "pets".to_owned(),
                 description: None,
@@ -76,6 +77,7 @@ mod tests {
                         description: None,
                     }],
                     request_body: None,
+                    responses: vec![],
                 }],
             }],
         }

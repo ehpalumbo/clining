@@ -10,6 +10,13 @@ pub struct OpenApi30Spec {
     pub servers: Option<Vec<Server>>,
     pub paths: BTreeMap<String, PathItem>,
     pub tags: Option<Vec<Tag>>,
+    pub components: Option<Components>,
+}
+
+/// Reusable component objects; only `schemas` are used today.
+#[derive(Debug, Deserialize)]
+pub struct Components {
+    pub schemas: BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -50,6 +57,13 @@ pub struct Operation {
     pub parameters: Option<Vec<Parameter>>,
     #[serde(rename = "requestBody")]
     pub request_body: Option<RequestBody>,
+    pub responses: Option<BTreeMap<String, Response>>,
+}
+
+/// A response object; only body content is captured.
+#[derive(Debug, Deserialize)]
+pub struct Response {
+    pub content: Option<BTreeMap<String, MediaType>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

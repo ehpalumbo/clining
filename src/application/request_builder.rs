@@ -154,6 +154,7 @@ mod tests {
             path_params,
             query_params,
             request_body,
+            responses: vec![],
         }
     }
 
@@ -272,7 +273,7 @@ mod tests {
         let spec = BodySpec {
             required: true,
             content_type: "application/json".to_owned(),
-            schema_json: None,
+            schema: None,
         };
         let operation = operation_with("/pets", vec![], vec![], Some(spec));
         let err = build_request("https://api.example.com", &operation, &HashMap::new(), None)
@@ -285,7 +286,7 @@ mod tests {
         let spec = BodySpec {
             required: true,
             content_type: "application/json".to_owned(),
-            schema_json: None,
+            schema: None,
         };
         let operation = operation_with("/pets", vec![], vec![], Some(spec));
         let req = build_request(
@@ -308,7 +309,7 @@ mod tests {
         let spec = BodySpec {
             required: false,
             content_type: String::new(),
-            schema_json: None,
+            schema: None,
         };
         let operation = operation_with("/pets", vec![], vec![], Some(spec));
         let req = build_request(

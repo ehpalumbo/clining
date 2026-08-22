@@ -1,6 +1,6 @@
 //! Persisted API model entities (Phase 2).
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use serde::{Deserialize, Serialize};
 
@@ -18,7 +18,16 @@ pub struct ApiModel {
     pub name: String,
     pub base_url: String,
     pub version: ModelVersion,
+    #[serde(default)]
+    pub schema_registry: BTreeMap<String, SchemaSpec>,
     pub operation_groups: Vec<ApiOperationGroup>,
+}
+
+impl ApiModel {
+    /// Returns the registry schema for the given ref id, if present.
+    pub fn schema_by_ref_id(&self, ref_id: &str) -> Option<&SchemaSpec> {
+        self.schema_registry.get(ref_id)
+    }
 }
 
 /// A named group of operations derived from an OpenAPI tag.
@@ -40,6 +49,8 @@ pub struct ApiOperation {
     pub path_params: Vec<Param>,
     pub query_params: Vec<Param>,
     pub request_body: Option<BodySpec>,
+    #[serde(default)]
+    pub responses: Vec<ResponseSpec>,
 }
 
 /// A path or query parameter, keeping both the original and CLI names.
@@ -52,12 +63,78 @@ pub struct Param {
     pub description: Option<String>,
 }
 
-/// Request body metadata; the raw schema is stored for help display only.
+/// Request body metadata; the typed schema is stored for help display only.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BodySpec {
     pub required: bool,
     pub content_type: String,
-    pub schema_json: Option<String>,
+    pub schema: Option<SchemaSpec>,
+}
+
+/// An operation response body captured by status code and content type.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResponseSpec {
+    pub status_code: String,
+    pub content_type: String,
+    pub schema: Option<SchemaSpec>,
+}
+
+/// Composite schema kind (logical combination of schemas).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[allow(clippy::enum_variant_names)]
+pub enum CompositeKind {
+    AllOf,
+    OneOf,
+    AnyOf,
+}
+
+impl CompositeKind {
+    pub fn keyword(&self) -> &'static str {
+        match self {
+            Self::AllOf => "allOf",
+            Self::OneOf => "oneOf",
+            Self::AnyOf => "anyOf",
+        }
+    }
+}
+
+/// A typed schema representation. Local `#/components/schemas/...` references
+/// are stored as `Ref` pointing at the model's schema registry (never inlined).
+/// Leaf nodes preserve their complete `raw_json` payload, while compound nodes
+/// store child schemas structurally and preserve only unmodeled metadata in
+/// `extra_json` to avoid duplication.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SchemaSpec {
+    Ref {
+        ref_id: String,
+    },
+    Object {
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        properties: BTreeMap<String, SchemaSpec>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        extra_json: Option<String>,
+    },
+    Array {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        items: Option<Box<SchemaSpec>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        extra_json: Option<String>,
+    },
+    Primitive {
+        raw_json: String,
+    },
+    Composite {
+        composite_kind: CompositeKind,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        schemas: Vec<SchemaSpec>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        extra_json: Option<String>,
+    },
+    Unknown {
+        raw_json: String,
+    },
 }
 
 /// HTTP method of an operation.

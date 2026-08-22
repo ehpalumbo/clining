@@ -11,7 +11,7 @@ use crate::application::invoke_operation::InvokeOperationService;
 use crate::application::learn_api::LearnApiService;
 use crate::domain::errors::DomainError;
 use crate::domain::model::{
-    ApiInvocationRequest, ApiModel, ApiOperation, ApiOperationGroup, BodySpec, Param,
+    ApiInvocationRequest, ApiModel, ApiOperation, ApiOperationGroup, BodySpec, Param, SchemaSpec,
 };
 use crate::domain::ports::{ApiStore, HttpInvoker, OpenApiParser, SpecLoader};
 
@@ -101,7 +101,7 @@ fn api_command(model: &ApiModel) -> Command {
                 }
                 command_cmd = command_cmd.arg(arg);
             }
-            command_cmd = command_cmd.after_help(command_footer(operation));
+            command_cmd = command_cmd.after_help(command_footer(model, operation));
             group_cmd = group_cmd.subcommand(command_cmd);
         }
         api = api.subcommand(group_cmd);
@@ -131,9 +131,9 @@ fn param_help_text(param: &Param) -> String {
 }
 
 /// Footer shown under a command's `--help`: the request line and, when the
-/// operation declares a body, its content type, requiredness, and schema
-/// summary.
-fn command_footer(command: &ApiOperation) -> String {
+/// operation declares a body, its content type, requiredness, and a
+/// fully-resolved JSON-schema tree.
+fn command_footer(model: &ApiModel, command: &ApiOperation) -> String {
     let mut text = format!("Request: {} {}", command.method.as_str(), command.path);
     if let Some(body) = &command.request_body {
         text.push_str(&format!(
@@ -143,7 +143,7 @@ fn command_footer(command: &ApiOperation) -> String {
         ));
         text.push_str(&format!(
             ", schema: {}\n",
-            request_body_schema_summary(body)
+            render_body_schema(model, &body.schema)
         ));
     }
     text
@@ -157,11 +157,106 @@ fn body_requiredness(body: &BodySpec) -> &'static str {
     }
 }
 
-fn request_body_schema_summary(body: &BodySpec) -> String {
-    body.schema_json
-        .as_ref()
-        .map(|json| json.trim().to_string())
-        .unwrap_or_else(|| "unknown".to_string())
+/// Renders the operation's request body schema as compact JSON, fully
+/// expanding registry refs. `None` renders as the literal `unknown`.
+fn render_body_schema(model: &ApiModel, schema: &Option<SchemaSpec>) -> String {
+    match schema {
+        Some(spec) => serde_json::to_string(&render_schema(spec, model, &mut Vec::new()))
+            .unwrap_or_else(|_| "{}".to_owned()),
+        None => "unknown".to_owned(),
+    }
+}
+
+/// Renders a `SchemaSpec` as a JSON-schema value, expanding registry refs
+/// recursively. `seen` is a path stack used to terminate cycles: a ref already
+/// on the stack (or absent from the registry) renders as a `$ref` marker.
+fn render_schema(spec: &SchemaSpec, model: &ApiModel, seen: &mut Vec<String>) -> serde_json::Value {
+    match spec {
+        SchemaSpec::Ref { ref_id } => {
+            if seen.iter().any(|id| id == ref_id) {
+                return serde_json::json!({ "$ref": format!("#/components/schemas/{ref_id}") });
+            }
+            match model.schema_by_ref_id(ref_id) {
+                Some(target) => {
+                    seen.push(ref_id.clone());
+                    let rendered = render_schema(target, model, seen);
+                    seen.pop();
+                    rendered
+                }
+                None => serde_json::json!({ "$ref": format!("#/components/schemas/{ref_id}") }),
+            }
+        }
+        SchemaSpec::Object {
+            properties,
+            extra_json,
+        } => {
+            let mut map = extra_json
+                .as_deref()
+                .and_then(|raw| serde_json::from_str(raw).ok())
+                .and_then(|v| match v {
+                    serde_json::Value::Object(m) => Some(m),
+                    _ => None,
+                })
+                .unwrap_or_default();
+            if !map.contains_key("type") {
+                map.insert("type".to_owned(), serde_json::json!("object"));
+            }
+            if !properties.is_empty() {
+                let mut props = serde_json::Map::new();
+                for (name, prop) in properties {
+                    props.insert(name.clone(), render_schema(prop, model, seen));
+                }
+                map.insert("properties".to_owned(), serde_json::Value::Object(props));
+            }
+            serde_json::Value::Object(map)
+        }
+        SchemaSpec::Array { items, extra_json } => {
+            let mut map = extra_json
+                .as_deref()
+                .and_then(|raw| serde_json::from_str(raw).ok())
+                .and_then(|v| match v {
+                    serde_json::Value::Object(m) => Some(m),
+                    _ => None,
+                })
+                .unwrap_or_default();
+            if !map.contains_key("type") {
+                map.insert("type".to_owned(), serde_json::json!("array"));
+            }
+            if let Some(items) = items {
+                map.insert("items".to_owned(), render_schema(items, model, seen));
+            }
+            serde_json::Value::Object(map)
+        }
+        SchemaSpec::Primitive { raw_json } => {
+            serde_json::from_str(raw_json).unwrap_or_else(|_| serde_json::json!({}))
+        }
+        SchemaSpec::Composite {
+            composite_kind,
+            schemas,
+            extra_json,
+        } => {
+            let mut map = extra_json
+                .as_deref()
+                .and_then(|raw| serde_json::from_str(raw).ok())
+                .and_then(|v| match v {
+                    serde_json::Value::Object(m) => Some(m),
+                    _ => None,
+                })
+                .unwrap_or_default();
+            let rendered: Vec<serde_json::Value> = schemas
+                .iter()
+                .map(|schema| render_schema(schema, model, seen))
+                .collect();
+            map.insert(
+                composite_kind.keyword().to_owned(),
+                serde_json::Value::Array(rendered),
+            );
+            serde_json::Value::Object(map)
+        }
+        SchemaSpec::Unknown { raw_json } => {
+            serde_json::from_str(raw_json).unwrap_or_else(|_| serde_json::json!({}))
+        }
+    }
 }
 
 /// Top-level dispatch decision based on the first positional argument.
@@ -478,8 +573,11 @@ fn status_text(status: u16) -> &'static str {
 mod tests {
     use super::*;
 
+    use std::collections::BTreeMap;
+
     use crate::domain::model::{
-        ApiOperation, ApiOperationGroup, BodySpec, HttpMethod, ModelVersion, Param,
+        ApiOperation, ApiOperationGroup, BodySpec, HttpMethod, ModelVersion, Param, ResponseSpec,
+        SchemaSpec,
     };
 
     fn sample_model() -> ApiModel {
@@ -487,6 +585,7 @@ mod tests {
             name: "pets".to_owned(),
             base_url: "https://example.com".to_owned(),
             version: ModelVersion::V1,
+            schema_registry: BTreeMap::new(),
             operation_groups: vec![ApiOperationGroup {
                 name: "pets".to_owned(),
                 description: Some("Everything about your pets".to_owned()),
@@ -510,8 +609,68 @@ mod tests {
                     request_body: Some(BodySpec {
                         required: true,
                         content_type: "application/json".to_owned(),
-                        schema_json: Some(r#"{"type":"object"}"#.to_owned()),
+                        schema: Some(SchemaSpec::Object {
+                            properties: BTreeMap::new(),
+                            extra_json: None,
+                        }),
                     }),
+                    responses: vec![],
+                }],
+            }],
+        }
+    }
+
+    fn model_with_registry() -> ApiModel {
+        ApiModel {
+            name: "pets".to_owned(),
+            base_url: "https://example.com".to_owned(),
+            version: ModelVersion::V1,
+            schema_registry: BTreeMap::from([(
+                "Order".to_owned(),
+                SchemaSpec::Object {
+                    properties: BTreeMap::from([
+                        (
+                            "id".to_owned(),
+                            SchemaSpec::Primitive {
+                                raw_json:
+                                    r#"{"description":"Order id","minimum":1,"type":"integer"}"#
+                                        .to_owned(),
+                            },
+                        ),
+                        (
+                            "petId".to_owned(),
+                            SchemaSpec::Primitive {
+                                raw_json: r#"{"type":"integer"}"#.to_owned(),
+                            },
+                        ),
+                    ]),
+                    extra_json: Some(r#"{"required":["id"]}"#.to_owned()),
+                },
+            )]),
+            operation_groups: vec![ApiOperationGroup {
+                name: "store".to_owned(),
+                description: None,
+                operations: vec![ApiOperation {
+                    name: "place-order".to_owned(),
+                    summary: None,
+                    method: HttpMethod::Post,
+                    path: "/store/orders".to_owned(),
+                    path_params: vec![],
+                    query_params: vec![],
+                    request_body: Some(BodySpec {
+                        required: true,
+                        content_type: "application/json".to_owned(),
+                        schema: Some(SchemaSpec::Ref {
+                            ref_id: "Order".to_owned(),
+                        }),
+                    }),
+                    responses: vec![ResponseSpec {
+                        status_code: "200".to_owned(),
+                        content_type: "application/json".to_owned(),
+                        schema: Some(SchemaSpec::Ref {
+                            ref_id: "Order".to_owned(),
+                        }),
+                    }],
                 }],
             }],
         }
@@ -707,6 +866,72 @@ mod tests {
             footer.contains("Body: application/json (required), schema: {\"type\":\"object\"}"),
             "{footer}"
         );
+    }
+
+    #[test]
+    fn ref_body_renders_expanded_tree_without_raw_ref() {
+        let cmd = build_cli_command(Some(&model_with_registry()));
+        let command = cmd
+            .find_subcommand("pets")
+            .unwrap()
+            .find_subcommand("store")
+            .unwrap()
+            .find_subcommand("place-order")
+            .unwrap()
+            .clone();
+        let footer = command.get_after_help().map(|s| s.to_string());
+        let footer = footer.unwrap();
+        assert!(footer.contains("schema: {\"properties\":"), "{footer}");
+        assert!(footer.contains("\"description\":\"Order id\""), "{footer}");
+        assert!(footer.contains("\"minimum\":1"), "{footer}");
+        assert!(footer.contains("\"required\":[\"id\"]"), "{footer}");
+        assert!(!footer.contains("\"$ref\""), "{footer}");
+    }
+
+    #[test]
+    fn cyclic_ref_renders_marker_at_cycle_point() {
+        let model = ApiModel {
+            name: "pets".to_owned(),
+            base_url: "https://example.com".to_owned(),
+            version: ModelVersion::V1,
+            schema_registry: BTreeMap::from([(
+                "Node".to_owned(),
+                SchemaSpec::Object {
+                    properties: BTreeMap::from([(
+                        "next".to_owned(),
+                        SchemaSpec::Ref {
+                            ref_id: "Node".to_owned(),
+                        },
+                    )]),
+                    extra_json: None,
+                },
+            )]),
+            operation_groups: vec![],
+        };
+        let rendered = render_body_schema(
+            &model,
+            &Some(SchemaSpec::Ref {
+                ref_id: "Node".to_owned(),
+            }),
+        );
+        let value: serde_json::Value = serde_json::from_str(&rendered).unwrap();
+        assert_eq!(value["type"], "object");
+        assert_eq!(
+            value["properties"]["next"]["$ref"],
+            "#/components/schemas/Node"
+        );
+    }
+
+    #[test]
+    fn unknown_schema_renders_wrapped_json() {
+        let model = sample_model();
+        let rendered = render_body_schema(
+            &model,
+            &Some(SchemaSpec::Unknown {
+                raw_json: r#"{"x-extension":true}"#.to_owned(),
+            }),
+        );
+        assert_eq!(rendered, r#"{"x-extension":true}"#);
     }
 
     #[test]
