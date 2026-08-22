@@ -7,13 +7,12 @@ use std::process::ExitCode;
 
 use clap::{Arg, ArgAction, Command};
 
-use crate::application::invoke_operation::InvokeOperationService;
-use crate::application::learn_api::LearnApiService;
+use crate::application::api_invocation::ApiInvocationService;
+use crate::application::api_model::ApiModelService;
 use crate::domain::errors::DomainError;
 use crate::domain::model::{
     ApiInvocationRequest, ApiModel, ApiOperation, ApiOperationGroup, BodySpec, Param, SchemaSpec,
 };
-use crate::domain::ports::{ApiStore, HttpInvoker, OpenApiParser, SpecLoader};
 
 /// Builds the full CLI command tree: the `install` subcommand plus, when a
 /// model is provided, the installed API as a nested subcommand tree. Without a
@@ -276,32 +275,15 @@ fn dispatch(argv: &[String]) -> Action {
     }
 }
 
-/// Main CLI application, holding the services and store needed to run commands.
-pub struct CliApp<'a, L, P, S, I>
-where
-    L: SpecLoader,
-    P: OpenApiParser,
-    S: ApiStore,
-    I: HttpInvoker,
-{
-    learn: LearnApiService<'a, L, P, S>,
-    store: &'a S,
-    invoker: I,
+/// Main CLI application, holding the services needed to run commands.
+pub struct CliApp {
+    models: ApiModelService,
+    invoker: ApiInvocationService,
 }
 
-impl<'a, L, P, S, I> CliApp<'a, L, P, S, I>
-where
-    L: SpecLoader,
-    P: OpenApiParser,
-    S: ApiStore,
-    I: HttpInvoker,
-{
-    pub fn new(learn: LearnApiService<'a, L, P, S>, store: &'a S, invoker: I) -> Self {
-        Self {
-            learn,
-            store,
-            invoker,
-        }
+impl CliApp {
+    pub fn new(models: ApiModelService, invoker: ApiInvocationService) -> Self {
+        Self { models, invoker }
     }
 
     /// Runs the CLI app, which dispatches to the appropriate handler and returns an exit code.
@@ -355,7 +337,7 @@ where
     fn run_invoke(&self, args: &[String]) -> ExitCode {
         // The first positional argument is the API name, which we use to load the model.
         let api_name = &args[1];
-        let model = match self.store.load_by_name(api_name) {
+        let model = match self.models.load(api_name) {
             Ok(model) => model,
             Err(err) => {
                 match err {
@@ -437,8 +419,7 @@ where
         let body = read_stdin_body();
         // Invoke the command using the service, passing the resolved request.
         let invocation = ApiInvocationRequest::new(model.base_url.clone(), operation, params, body);
-        let service = InvokeOperationService::new(&self.invoker);
-        let response = match service.invoke(&invocation) {
+        let response = match self.invoker.invoke(&invocation) {
             Ok(response) => response,
             Err(err) => {
                 eprintln!("error: {err}");
@@ -476,7 +457,7 @@ where
         spec_source: &str,
         base_url: Option<&str>,
     ) -> Result<(), DomainError> {
-        let model = self.learn.learn(name, spec_source, base_url)?;
+        let model = self.models.learn(name, spec_source, base_url)?;
         let groups = model.operation_groups.len();
         let commands = model
             .operation_groups

@@ -1,8 +1,8 @@
 //! Blocking reqwest client implementing `HttpInvoker` (Phase 3).
 
+use crate::application::ports::HttpInvoker;
 use crate::domain::errors::DomainError;
 use crate::domain::model::{HttpRequest, HttpResponse};
-use crate::domain::ports::HttpInvoker;
 
 /// Adapter that sends `HttpRequest`s over real HTTP via blocking reqwest.
 pub struct ReqwestHttpClient {

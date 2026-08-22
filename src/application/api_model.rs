@@ -1,32 +1,26 @@
-//! "Learn API" use case: SpecLoader -> OpenApiParser -> ApiStore.save (Phase 2).
+//! API model management use cases: learn/install from spec and load installed models.
 
+use crate::application::ports::{ApiStore, OpenApiParser, SpecLoader};
 use crate::domain::errors::DomainError;
 use crate::domain::model::{ApiModel, validate_name};
-use crate::domain::ports::{ApiStore, OpenApiParser, SpecLoader};
 
-/// Orchestrates fetching, parsing, and persisting an API model.
-pub struct LearnApiService<'a, L, P, S>
-where
-    L: SpecLoader,
-    P: OpenApiParser,
-    S: ApiStore,
-{
-    loader: L,
-    parser: P,
-    store: &'a S,
+/// Orchestrates fetching, parsing, persisting, and loading API models.
+pub struct ApiModelService {
+    loader: Box<dyn SpecLoader>,
+    parser: Box<dyn OpenApiParser>,
+    store: Box<dyn ApiStore>,
 }
 
-impl<'a, L, P, S> LearnApiService<'a, L, P, S>
-where
-    L: SpecLoader,
-    P: OpenApiParser,
-    S: ApiStore,
-{
-    pub fn new(loader: L, parser: P, store: &'a S) -> Self {
+impl ApiModelService {
+    pub fn new(
+        loader: impl SpecLoader + 'static,
+        parser: impl OpenApiParser + 'static,
+        store: impl ApiStore + 'static,
+    ) -> Self {
         Self {
-            loader,
-            parser,
-            store,
+            loader: Box::new(loader),
+            parser: Box::new(parser),
+            store: Box::new(store),
         }
     }
 
@@ -47,6 +41,11 @@ where
         }
         self.store.save(&model)?;
         Ok(model)
+    }
+
+    /// Loads an installed API model by name.
+    pub fn load(&self, name: &str) -> Result<ApiModel, DomainError> {
+        self.store.load_by_name(name)
     }
 }
 
@@ -92,19 +91,22 @@ mod tests {
     }
 
     impl FakeStore {
-        fn new() -> Self {
-            Self {
-                saved: Rc::new(RefCell::new(vec![])),
-            }
+        fn new(saved: Rc<RefCell<Vec<ApiModel>>>) -> Self {
+            Self { saved }
         }
     }
 
     impl ApiStore for FakeStore {
         fn load_by_name(&self, name: &str) -> Result<ApiModel, DomainError> {
-            Err(DomainError::NotFound {
-                name: name.to_owned(),
-                path: "fake-root".to_owned(),
-            })
+            self.saved
+                .borrow()
+                .iter()
+                .find(|m| m.name == name)
+                .cloned()
+                .ok_or_else(|| DomainError::NotFound {
+                    name: name.to_owned(),
+                    path: "fake-root".to_owned(),
+                })
         }
 
         fn save(&self, model: &ApiModel) -> Result<(), DomainError> {
@@ -119,9 +121,9 @@ mod tests {
 
     #[test]
     fn install_persists_model_with_override() {
-        let store = FakeStore::new();
-        let saved = Rc::clone(&store.saved);
-        let svc = LearnApiService::new(loader(b"{}".to_vec()), FakeParser, &store);
+        let saved = Rc::new(RefCell::new(vec![]));
+        let store = FakeStore::new(Rc::clone(&saved));
+        let svc = ApiModelService::new(loader(b"{}".to_vec()), FakeParser, store);
         let model = svc
             .learn("pets", "spec.json", Some("http://override"))
             .unwrap();
@@ -134,9 +136,9 @@ mod tests {
 
     #[test]
     fn invalid_spec_propagates_and_nothing_is_saved() {
-        let store = FakeStore::new();
-        let saved = Rc::clone(&store.saved);
-        let svc = LearnApiService::new(loader(vec![]), FakeParser, &store);
+        let saved = Rc::new(RefCell::new(vec![]));
+        let store = FakeStore::new(Rc::clone(&saved));
+        let svc = ApiModelService::new(loader(vec![]), FakeParser, store);
         let err = svc.learn("pets", "spec.json", None).unwrap_err();
         assert!(matches!(err, DomainError::InvalidSpec { .. }));
         assert!(saved.borrow().is_empty());
@@ -144,11 +146,29 @@ mod tests {
 
     #[test]
     fn invalid_name_is_rejected() {
-        let store = FakeStore::new();
-        let saved = Rc::clone(&store.saved);
-        let svc = LearnApiService::new(loader(b"{}".to_vec()), FakeParser, &store);
+        let saved = Rc::new(RefCell::new(vec![]));
+        let store = FakeStore::new(Rc::clone(&saved));
+        let svc = ApiModelService::new(loader(b"{}".to_vec()), FakeParser, store);
         let err = svc.learn("a/b", "spec.json", None).unwrap_err();
         assert!(matches!(err, DomainError::InvalidName { .. }));
         assert!(saved.borrow().is_empty());
+    }
+
+    #[test]
+    fn load_model_from_store() {
+        let saved = Rc::new(RefCell::new(vec![ApiModel {
+            name: "existing".to_owned(),
+            base_url: "https://existing.example.com".to_owned(),
+            version: ModelVersion::V1,
+            schema_registry: std::collections::BTreeMap::new(),
+            operation_groups: vec![],
+        }]));
+        let store = FakeStore::new(Rc::clone(&saved));
+        let svc = ApiModelService::new(loader(b"{}".to_vec()), FakeParser, store);
+        let model = svc.load("existing").unwrap();
+        assert_eq!(model.name, "existing");
+
+        let err = svc.load("nonexistent").unwrap_err();
+        assert!(matches!(err, DomainError::NotFound { .. }));
     }
 }

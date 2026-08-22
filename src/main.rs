@@ -7,7 +7,8 @@ mod infra;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use application::learn_api::LearnApiService;
+use application::api_invocation::ApiInvocationService;
+use application::api_model::ApiModelService;
 use infra::cli::clap_cli::CliApp;
 use infra::http::reqwest_http::ReqwestHttpClient;
 use infra::openapi::parser::Parser;
@@ -25,7 +26,6 @@ fn main() -> ExitCode {
         }
     };
     let store = JsonFileStore::new(store_root);
-    let learn = LearnApiService::new(SourceLoader, Parser, &store);
     let invoker = match ReqwestHttpClient::new() {
         Ok(client) => client,
         Err(e) => {
@@ -33,7 +33,11 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    CliApp::new(learn, &store, invoker).run()
+
+    let models = ApiModelService::new(SourceLoader, Parser, store);
+    let invoke_service = ApiInvocationService::new(invoker);
+
+    CliApp::new(models, invoke_service).run()
 }
 
 /// Returns the path to the model store directory, or `None` if it cannot be determined.

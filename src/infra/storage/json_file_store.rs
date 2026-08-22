@@ -3,9 +3,9 @@
 use std::fs;
 use std::path::PathBuf;
 
+use crate::application::ports::ApiStore;
 use crate::domain::errors::DomainError;
 use crate::domain::model::{ApiModel, validate_name};
-use crate::domain::ports::ApiStore;
 
 /// Stores one plain JSON file per API at `<root>/<name>.json`.
 pub struct JsonFileStore {

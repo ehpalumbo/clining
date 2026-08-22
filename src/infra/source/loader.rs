@@ -2,8 +2,8 @@
 
 use std::time::Duration;
 
+use crate::application::ports::SpecLoader;
 use crate::domain::errors::DomainError;
-use crate::domain::ports::SpecLoader;
 
 /// Loads spec bytes from a local file path or an `http(s)://` URI.
 pub struct SourceLoader;

@@ -1,4 +1,4 @@
-//! Domain ports implemented by infrastructure adapters (Phases 2-3).
+//! Application ports implemented by infrastructure adapters.
 
 use crate::domain::errors::DomainError;
 use crate::domain::model::{ApiModel, HttpRequest, HttpResponse};
@@ -22,20 +22,4 @@ pub trait OpenApiParser {
 /// Sends an HTTP request, returning the raw response.
 pub trait HttpInvoker {
     fn send(&self, request: &HttpRequest) -> Result<HttpResponse, DomainError>;
-}
-
-impl<T: ApiStore + ?Sized> ApiStore for &T {
-    fn load_by_name(&self, name: &str) -> Result<ApiModel, DomainError> {
-        (**self).load_by_name(name)
-    }
-
-    fn save(&self, model: &ApiModel) -> Result<(), DomainError> {
-        (**self).save(model)
-    }
-}
-
-impl<T: HttpInvoker + ?Sized> HttpInvoker for &T {
-    fn send(&self, request: &HttpRequest) -> Result<HttpResponse, DomainError> {
-        (**self).send(request)
-    }
 }

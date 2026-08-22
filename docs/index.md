@@ -12,7 +12,13 @@ The product specification for clining: goals, usage contract, functional and non
 
 Repository-wide architectural guidance for the clining codebase.
 
-- [Architecture Overview](architecture/overview.md) - The concentric domain/application/infra layering with inward-only dependencies, ports, key domain rules, and the learn/invoke data flows.
+- [Architecture Overview](architecture/overview.md) - The concentric domain/application/infra layering with inward-only dependencies, application-owned ports, key domain rules, and the install/invoke data flows.
+
+## Decision Records
+
+Architecture decision records capturing the context, choices, and trade-offs behind structural changes to the codebase.
+
+- [ADR-001: Application-Owned Ports and Owned Service Dependencies](decisions/adr-001-application-ports-and-owned-services.md) - Moves port traits from domain to application and has services own their dependencies as trait objects, eliminating generics and lifetimes from service signatures.
 
 ## Plans
 

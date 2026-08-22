@@ -1,25 +1,21 @@
 //! "Invoke operation" use case: build and send the HTTP request for an
-//! `ApiInvocationRequest` (Phase 3).
+//! `ApiInvocationRequest`.
 
+use crate::application::ports::HttpInvoker;
 use crate::application::request_builder::build_request;
 use crate::domain::errors::DomainError;
 use crate::domain::model::{ApiInvocationRequest, HttpResponse};
-use crate::domain::ports::HttpInvoker;
 
 /// Sends a fully-resolved operation invocation.
-pub struct InvokeOperationService<I>
-where
-    I: HttpInvoker,
-{
-    invoker: I,
+pub struct ApiInvocationService {
+    invoker: Box<dyn HttpInvoker>,
 }
 
-impl<I> InvokeOperationService<I>
-where
-    I: HttpInvoker,
-{
-    pub fn new(invoker: I) -> Self {
-        Self { invoker }
+impl ApiInvocationService {
+    pub fn new(invoker: impl HttpInvoker + 'static) -> Self {
+        Self {
+            invoker: Box::new(invoker),
+        }
     }
 
     /// Builds the HTTP request from the invocation and sends it, returning the
@@ -110,15 +106,12 @@ mod tests {
         }
     }
 
-    fn service() -> (
-        InvokeOperationService<FakeInvoker>,
-        Rc<RefCell<Option<HttpRequest>>>,
-    ) {
+    fn service() -> (ApiInvocationService, Rc<RefCell<Option<HttpRequest>>>) {
         let captured = Rc::new(RefCell::new(None));
         let invoker = FakeInvoker {
             captured: Rc::clone(&captured),
         };
-        (InvokeOperationService::new(invoker), captured)
+        (ApiInvocationService::new(invoker), captured)
     }
 
     #[test]

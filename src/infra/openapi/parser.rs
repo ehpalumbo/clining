@@ -5,13 +5,13 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use super::spec::{
     MediaType, OpenApi30Spec, Operation, Parameter, PathItem, RequestBody, Response,
 };
+use crate::application::ports::OpenApiParser;
 use crate::domain::command_name::{cli_name, command_name, disambiguate};
 use crate::domain::errors::DomainError;
 use crate::domain::model::{
     ApiModel, ApiOperation, ApiOperationGroup, BodySpec, CompositeKind, HttpMethod, ModelVersion,
     Param, ResponseSpec, SchemaSpec,
 };
-use crate::domain::ports::OpenApiParser;
 
 /// Adapter that parses OpenAPI 3.0.x JSON into a domain `ApiModel`.
 pub struct Parser;
