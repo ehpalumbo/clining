@@ -8,8 +8,8 @@ use super::spec::{
 use crate::domain::command_name::{cli_name, command_name, disambiguate};
 use crate::domain::errors::DomainError;
 use crate::domain::model::{
-    ApiModel, ApiOperation, ApiOperationGroup, BodySpec, HttpMethod, ModelVersion, Param,
-    ResponseSpec, SchemaProperty, SchemaSpec,
+    ApiModel, ApiOperation, ApiOperationGroup, BodySpec, CompositeKind, HttpMethod, ModelVersion,
+    Param, ResponseSpec, SchemaSpec,
 };
 use crate::domain::ports::OpenApiParser;
 
@@ -264,8 +264,9 @@ impl Parser {
 
     /// Converts a raw JSON schema into the typed `SchemaSpec`. Local
     /// `#/components/schemas/...` refs become `Ref` (never inlined, so cyclic
-    /// schemas are safe at learn time); everything else falls back to
-    /// `Unknown` preserving the original JSON.
+    /// schemas are safe at learn time); object, array, and composite nodes retain
+    /// their navigation structure and store only unmodeled metadata in `extra_json`;
+    /// primitive and unknown nodes preserve complete raw JSON payloads.
     fn parse_schema(value: &serde_json::Value) -> SchemaSpec {
         let obj = match value.as_object() {
             Some(obj) => obj,
@@ -277,23 +278,26 @@ impl Parser {
                 None => Self::unknown(value),
             };
         }
-        for keyword in ["allOf", "oneOf", "anyOf"] {
-            if let Some(branches) = obj.get(keyword).and_then(serde_json::Value::as_array) {
-                return SchemaSpec::Composite {
-                    schemas: branches.iter().map(Self::parse_schema).collect(),
-                };
+        for composite_kind in [
+            CompositeKind::AllOf,
+            CompositeKind::OneOf,
+            CompositeKind::AnyOf,
+        ] {
+            if let Some(branches) = obj
+                .get(composite_kind.keyword())
+                .and_then(serde_json::Value::as_array)
+            {
+                return Self::composite_schema(obj, composite_kind, branches);
             }
         }
         match obj.get("type").and_then(serde_json::Value::as_str) {
             Some("object") => return Self::object_schema(obj),
-            Some("array") => {
-                let items = obj.get("items").map(Self::parse_schema).map(Box::new);
-                return SchemaSpec::Array { items };
+            Some("array") => return Self::array_schema(obj),
+            Some("integer" | "number" | "string" | "boolean") => {
+                return SchemaSpec::Primitive {
+                    raw_json: value.to_string(),
+                };
             }
-            Some("integer") => return SchemaSpec::Integer,
-            Some("number") => return SchemaSpec::Number,
-            Some("string") => return SchemaSpec::String,
-            Some("boolean") => return SchemaSpec::Boolean,
             _ => {}
         }
         if obj.contains_key("properties") {
@@ -308,38 +312,66 @@ impl Parser {
         }
     }
 
-    /// Maps an object schema to `SchemaSpec::Object`, deriving each property's
-    /// requiredness from the object's `required` name list.
+    fn composite_schema(
+        obj: &serde_json::Map<String, serde_json::Value>,
+        composite_kind: CompositeKind,
+        branches: &[serde_json::Value],
+    ) -> SchemaSpec {
+        let schemas = branches.iter().map(Self::parse_schema).collect();
+        let mut extra = obj.clone();
+        extra.remove(composite_kind.keyword());
+        let extra_json = Self::extra_json_string(extra);
+        SchemaSpec::Composite {
+            composite_kind,
+            schemas,
+            extra_json,
+        }
+    }
+
+    /// Maps an object schema to `SchemaSpec::Object`, recursively parsing each property
+    /// and storing only unmodeled extra metadata in `extra_json`.
     fn object_schema(obj: &serde_json::Map<String, serde_json::Value>) -> SchemaSpec {
-        let required_list: Vec<&str> = obj
-            .get("required")
-            .and_then(serde_json::Value::as_array)
-            .map(|arr| arr.iter().filter_map(serde_json::Value::as_str).collect())
-            .unwrap_or_default();
         let properties = obj
             .get("properties")
             .and_then(serde_json::Value::as_object)
             .map(|props| {
                 props
                     .iter()
-                    .map(|(property_name, prop)| {
-                        let description = prop
-                            .get("description")
-                            .and_then(serde_json::Value::as_str)
-                            .map(str::to_owned);
-                        (
-                            property_name.clone(),
-                            SchemaProperty {
-                                schema: Self::parse_schema(prop),
-                                required: required_list.contains(&property_name.as_str()),
-                                description,
-                            },
-                        )
-                    })
+                    .map(|(property_name, prop)| (property_name.clone(), Self::parse_schema(prop)))
                     .collect()
             })
             .unwrap_or_default();
-        SchemaSpec::Object { properties }
+        let mut extra = obj.clone();
+        extra.remove("properties");
+        if extra.get("type").and_then(serde_json::Value::as_str) == Some("object") {
+            extra.remove("type");
+        }
+        let extra_json = Self::extra_json_string(extra);
+        SchemaSpec::Object {
+            properties,
+            extra_json,
+        }
+    }
+
+    /// Maps an array schema to `SchemaSpec::Array`, recursively parsing items
+    /// and storing only unmodeled extra metadata in `extra_json`.
+    fn array_schema(obj: &serde_json::Map<String, serde_json::Value>) -> SchemaSpec {
+        let items = obj.get("items").map(Self::parse_schema).map(Box::new);
+        let mut extra = obj.clone();
+        extra.remove("items");
+        if extra.get("type").and_then(serde_json::Value::as_str) == Some("array") {
+            extra.remove("type");
+        }
+        let extra_json = Self::extra_json_string(extra);
+        SchemaSpec::Array { items, extra_json }
+    }
+
+    fn extra_json_string(extra: serde_json::Map<String, serde_json::Value>) -> Option<String> {
+        if extra.is_empty() {
+            None
+        } else {
+            Some(serde_json::Value::Object(extra).to_string())
+        }
     }
 
     /// Trailing name for a local `#/components/schemas/<name>` reference.
@@ -369,9 +401,9 @@ mod tests {
                     "type": "object",
                     "required": ["id"],
                     "properties": {
-                        "id": { "type": "integer", "description": "Order id" },
+                        "id": { "type": "integer", "description": "Order id", "minimum": 1 },
                         "petId": { "type": "integer" },
-                        "quantity": { "type": "integer", "description": "Number of units" }
+                        "quantity": { "type": "integer", "description": "Number of units", "minimum": 1, "default": 1 }
                     }
                 }
             }
@@ -514,7 +546,8 @@ mod tests {
         assert_eq!(
             body.schema,
             Some(SchemaSpec::Object {
-                properties: BTreeMap::new()
+                properties: BTreeMap::new(),
+                extra_json: None,
             })
         );
     }
@@ -586,16 +619,59 @@ mod tests {
         let model = parse_fixture();
         let order = model.schema_by_ref_id("Order").unwrap();
         match order {
-            SchemaSpec::Object { properties } => {
+            SchemaSpec::Object {
+                properties,
+                extra_json,
+            } => {
                 assert_eq!(properties.len(), 3);
-                let id = &properties["id"];
-                assert!(id.required);
-                assert_eq!(id.description.as_deref(), Some("Order id"));
-                assert_eq!(id.schema, SchemaSpec::Integer);
-                let quantity = &properties["quantity"];
-                assert!(!quantity.required);
-                assert_eq!(quantity.description.as_deref(), Some("Number of units"));
-                assert_eq!(quantity.schema, SchemaSpec::Integer);
+                assert_eq!(extra_json.as_deref(), Some(r#"{"required":["id"]}"#));
+                match &properties["id"] {
+                    SchemaSpec::Primitive { raw_json } => {
+                        assert!(
+                            raw_json.contains(r#""description":"Order id""#)
+                                || raw_json.contains(r#""description": "Order id""#)
+                        );
+                        assert!(
+                            raw_json.contains(r#""minimum":1"#)
+                                || raw_json.contains(r#""minimum": 1"#)
+                        );
+                        assert!(
+                            raw_json.contains(r#""type":"integer""#)
+                                || raw_json.contains(r#""type": "integer""#)
+                        );
+                    }
+                    other => panic!("expected primitive, got {other:?}"),
+                }
+                match &properties["quantity"] {
+                    SchemaSpec::Primitive { raw_json } => {
+                        assert!(
+                            raw_json.contains(r#""description":"Number of units""#)
+                                || raw_json.contains(r#""description": "Number of units""#)
+                        );
+                        assert!(
+                            raw_json.contains(r#""minimum":1"#)
+                                || raw_json.contains(r#""minimum": 1"#)
+                        );
+                        assert!(
+                            raw_json.contains(r#""default":1"#)
+                                || raw_json.contains(r#""default": 1"#)
+                        );
+                        assert!(
+                            raw_json.contains(r#""type":"integer""#)
+                                || raw_json.contains(r#""type": "integer""#)
+                        );
+                    }
+                    other => panic!("expected primitive, got {other:?}"),
+                }
+                match &properties["petId"] {
+                    SchemaSpec::Primitive { raw_json } => {
+                        assert!(
+                            raw_json.contains(r#""type":"integer""#)
+                                || raw_json.contains(r#""type": "integer""#)
+                        );
+                    }
+                    other => panic!("expected primitive, got {other:?}"),
+                }
             }
             other => panic!("expected object schema, got {other:?}"),
         }
@@ -640,7 +716,8 @@ mod tests {
         assert_eq!(
             resp.schema,
             Some(SchemaSpec::Object {
-                properties: BTreeMap::new()
+                properties: BTreeMap::new(),
+                extra_json: None,
             })
         );
 
@@ -674,15 +751,16 @@ mod tests {
                     "Thing": {
                         "type": "object",
                         "properties": {
-                            "tags": { "type": "array", "items": { "type": "string" } },
-                            "price": { "type": "number" },
-                            "active": { "type": "boolean" }
+                            "tags": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 2 } },
+                            "price": { "type": "number", "minimum": 0.0, "maximum": 999.99 },
+                            "active": { "type": "boolean", "default": true }
                         }
                     },
                     "Union": {
+                        "description": "A union of string or integer",
                         "oneOf": [
                             { "type": "string" },
-                            { "type": "integer" }
+                            { "type": "integer", "minimum": 1 }
                         ]
                     },
                     "FreeForm": { "type": "object" },
@@ -695,45 +773,99 @@ mod tests {
         let model = Parser.parse(spec.as_bytes()).unwrap();
 
         match model.schema_by_ref_id("Thing").unwrap() {
-            SchemaSpec::Object { properties } => {
-                assert_eq!(
-                    properties["tags"].schema,
-                    SchemaSpec::Array {
-                        items: Some(Box::new(SchemaSpec::String))
+            SchemaSpec::Object {
+                properties,
+                extra_json,
+            } => {
+                assert_eq!(*extra_json, None);
+                match &properties["tags"] {
+                    SchemaSpec::Array { items, extra_json } => {
+                        assert_eq!(extra_json.as_deref(), Some(r#"{"minItems":1}"#));
+                        match items.as_deref().unwrap() {
+                            SchemaSpec::Primitive { raw_json } => {
+                                assert!(
+                                    raw_json.contains(r#""minLength":2"#)
+                                        || raw_json.contains(r#""minLength": 2"#)
+                                );
+                            }
+                            other => panic!("expected primitive, got {other:?}"),
+                        }
                     }
-                );
-                assert_eq!(properties["price"].schema, SchemaSpec::Number);
-                assert_eq!(properties["active"].schema, SchemaSpec::Boolean);
+                    other => panic!("expected array, got {other:?}"),
+                }
+                match &properties["price"] {
+                    SchemaSpec::Primitive { raw_json } => {
+                        assert!(
+                            raw_json.contains(r#""minimum":0.0"#)
+                                || raw_json.contains(r#""minimum": 0.0"#)
+                                || raw_json.contains(r#""minimum": 0"#)
+                                || raw_json.contains(r#""minimum":0"#)
+                        );
+                        assert!(
+                            raw_json.contains(r#""maximum":999.99"#)
+                                || raw_json.contains(r#""maximum": 999.99"#)
+                        );
+                    }
+                    other => panic!("expected primitive, got {other:?}"),
+                }
+                match &properties["active"] {
+                    SchemaSpec::Primitive { raw_json } => {
+                        assert!(
+                            raw_json.contains(r#""default":true"#)
+                                || raw_json.contains(r#""default": true"#)
+                        );
+                    }
+                    other => panic!("expected primitive, got {other:?}"),
+                }
             }
             other => panic!("expected object schema, got {other:?}"),
         }
-        assert_eq!(
-            model.schema_by_ref_id("Union").unwrap(),
-            &SchemaSpec::Composite {
-                schemas: vec![SchemaSpec::String, SchemaSpec::Integer]
+        match model.schema_by_ref_id("Union").unwrap() {
+            SchemaSpec::Composite {
+                composite_kind,
+                schemas,
+                extra_json,
+            } => {
+                assert_eq!(*composite_kind, CompositeKind::OneOf);
+                assert_eq!(schemas.len(), 2);
+                assert_eq!(
+                    extra_json.as_deref(),
+                    Some(r#"{"description":"A union of string or integer"}"#)
+                );
+                match &schemas[1] {
+                    SchemaSpec::Primitive { raw_json } => {
+                        assert!(
+                            raw_json.contains(r#""minimum":1"#)
+                                || raw_json.contains(r#""minimum": 1"#)
+                        );
+                    }
+                    other => panic!("expected primitive, got {other:?}"),
+                }
             }
-        );
+            other => panic!("expected composite, got {other:?}"),
+        }
         assert_eq!(
             model.schema_by_ref_id("FreeForm").unwrap(),
             &SchemaSpec::Object {
-                properties: BTreeMap::new()
+                properties: BTreeMap::new(),
+                extra_json: None,
             }
         );
-        assert_eq!(
-            model.schema_by_ref_id("SelfRef").unwrap(),
-            &SchemaSpec::Object {
-                properties: BTreeMap::from([(
-                    "next".to_owned(),
-                    SchemaProperty {
-                        schema: SchemaSpec::Ref {
-                            ref_id: "SelfRef".to_owned()
-                        },
-                        required: false,
-                        description: None,
+        match model.schema_by_ref_id("SelfRef").unwrap() {
+            SchemaSpec::Object {
+                properties,
+                extra_json,
+            } => {
+                assert_eq!(*extra_json, None);
+                assert_eq!(
+                    properties["next"],
+                    SchemaSpec::Ref {
+                        ref_id: "SelfRef".to_owned()
                     }
-                )])
+                );
             }
-        );
+            other => panic!("expected object schema, got {other:?}"),
+        }
         match model.schema_by_ref_id("External").unwrap() {
             SchemaSpec::Unknown { raw_json } => {
                 assert!(raw_json.contains("https://example.com"), "{raw_json}");

@@ -79,19 +79,31 @@ pub struct ResponseSpec {
     pub schema: Option<SchemaSpec>,
 }
 
-/// A property of an object schema: its own schema plus requiredness and
-/// description derived from the surrounding object schema.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SchemaProperty {
-    pub schema: SchemaSpec,
-    pub required: bool,
-    #[serde(default)]
-    pub description: Option<String>,
+/// Composite schema kind (logical combination of schemas).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[allow(clippy::enum_variant_names)]
+pub enum CompositeKind {
+    AllOf,
+    OneOf,
+    AnyOf,
 }
 
-/// A typed OpenAPI schema. Local `#/components/schemas/...` references are
-/// stored as `Ref` pointing at the model's schema registry (never inlined);
-/// anything unrepresentable is preserved verbatim in `Unknown`.
+impl CompositeKind {
+    pub fn keyword(&self) -> &'static str {
+        match self {
+            Self::AllOf => "allOf",
+            Self::OneOf => "oneOf",
+            Self::AnyOf => "anyOf",
+        }
+    }
+}
+
+/// A typed schema representation. Local `#/components/schemas/...` references
+/// are stored as `Ref` pointing at the model's schema registry (never inlined).
+/// Leaf nodes preserve their complete `raw_json` payload, while compound nodes
+/// store child schemas structurally and preserve only unmodeled metadata in
+/// `extra_json` to avoid duplication.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SchemaSpec {
@@ -99,17 +111,26 @@ pub enum SchemaSpec {
         ref_id: String,
     },
     Object {
-        properties: BTreeMap<String, SchemaProperty>,
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        properties: BTreeMap<String, SchemaSpec>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        extra_json: Option<String>,
     },
     Array {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         items: Option<Box<SchemaSpec>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        extra_json: Option<String>,
     },
-    Integer,
-    Number,
-    String,
-    Boolean,
+    Primitive {
+        raw_json: String,
+    },
     Composite {
+        composite_kind: CompositeKind,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
         schemas: Vec<SchemaSpec>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        extra_json: Option<String>,
     },
     Unknown {
         raw_json: String,

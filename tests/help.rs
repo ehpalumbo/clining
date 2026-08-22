@@ -114,7 +114,9 @@ fn command_help_shows_resolved_reference_schema() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("application/json"), "{stdout}");
     assert!(stdout.contains("schema: {\"properties\":"), "{stdout}");
-    assert!(stdout.contains("\"required\":true"), "{stdout}");
+    assert!(stdout.contains("\"required\":[\"id\"]"), "{stdout}");
     assert!(stdout.contains("\"description\":\"Order id\""), "{stdout}");
+    assert!(stdout.contains("\"minimum\":1"), "{stdout}");
+    assert!(stdout.contains("\"default\":1"), "{stdout}");
     assert!(!stdout.contains("\"$ref\""), "{stdout}");
 }

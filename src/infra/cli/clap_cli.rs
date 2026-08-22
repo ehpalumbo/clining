@@ -186,47 +186,72 @@ fn render_schema(spec: &SchemaSpec, model: &ApiModel, seen: &mut Vec<String>) ->
                 None => serde_json::json!({ "$ref": format!("#/components/schemas/{ref_id}") }),
             }
         }
-        SchemaSpec::Object { properties } => {
-            let mut out = serde_json::Map::new();
-            out.insert("type".to_owned(), serde_json::json!("object"));
-            let props: serde_json::Map<String, serde_json::Value> = properties
-                .iter()
-                .map(|(name, prop)| {
-                    let mut rendered = render_schema(&prop.schema, model, seen);
-                    if let Some(description) = &prop.description
-                        && let serde_json::Value::Object(map) = &mut rendered
-                    {
-                        map.insert("description".to_owned(), serde_json::json!(description));
-                    }
-                    if let serde_json::Value::Object(map) = &mut rendered {
-                        map.insert("required".to_owned(), serde_json::json!(prop.required));
-                    }
-                    (name.clone(), rendered)
+        SchemaSpec::Object {
+            properties,
+            extra_json,
+        } => {
+            let mut map = extra_json
+                .as_deref()
+                .and_then(|raw| serde_json::from_str(raw).ok())
+                .and_then(|v| match v {
+                    serde_json::Value::Object(m) => Some(m),
+                    _ => None,
                 })
-                .collect();
-            if !props.is_empty() {
-                out.insert("properties".to_owned(), serde_json::json!(props));
+                .unwrap_or_default();
+            if !map.contains_key("type") {
+                map.insert("type".to_owned(), serde_json::json!("object"));
             }
-            serde_json::Value::Object(out)
+            if !properties.is_empty() {
+                let mut props = serde_json::Map::new();
+                for (name, prop) in properties {
+                    props.insert(name.clone(), render_schema(prop, model, seen));
+                }
+                map.insert("properties".to_owned(), serde_json::Value::Object(props));
+            }
+            serde_json::Value::Object(map)
         }
-        SchemaSpec::Array { items } => {
-            let mut out = serde_json::Map::new();
-            out.insert("type".to_owned(), serde_json::json!("array"));
+        SchemaSpec::Array { items, extra_json } => {
+            let mut map = extra_json
+                .as_deref()
+                .and_then(|raw| serde_json::from_str(raw).ok())
+                .and_then(|v| match v {
+                    serde_json::Value::Object(m) => Some(m),
+                    _ => None,
+                })
+                .unwrap_or_default();
+            if !map.contains_key("type") {
+                map.insert("type".to_owned(), serde_json::json!("array"));
+            }
             if let Some(items) = items {
-                out.insert("items".to_owned(), render_schema(items, model, seen));
+                map.insert("items".to_owned(), render_schema(items, model, seen));
             }
-            serde_json::Value::Object(out)
+            serde_json::Value::Object(map)
         }
-        SchemaSpec::Integer => serde_json::json!({ "type": "integer" }),
-        SchemaSpec::Number => serde_json::json!({ "type": "number" }),
-        SchemaSpec::String => serde_json::json!({ "type": "string" }),
-        SchemaSpec::Boolean => serde_json::json!({ "type": "boolean" }),
-        SchemaSpec::Composite { schemas } => {
+        SchemaSpec::Primitive { raw_json } => {
+            serde_json::from_str(raw_json).unwrap_or_else(|_| serde_json::json!({}))
+        }
+        SchemaSpec::Composite {
+            composite_kind,
+            schemas,
+            extra_json,
+        } => {
+            let mut map = extra_json
+                .as_deref()
+                .and_then(|raw| serde_json::from_str(raw).ok())
+                .and_then(|v| match v {
+                    serde_json::Value::Object(m) => Some(m),
+                    _ => None,
+                })
+                .unwrap_or_default();
             let rendered: Vec<serde_json::Value> = schemas
                 .iter()
                 .map(|schema| render_schema(schema, model, seen))
                 .collect();
-            serde_json::json!({ "composite": rendered })
+            map.insert(
+                composite_kind.keyword().to_owned(),
+                serde_json::Value::Array(rendered),
+            );
+            serde_json::Value::Object(map)
         }
         SchemaSpec::Unknown { raw_json } => {
             serde_json::from_str(raw_json).unwrap_or_else(|_| serde_json::json!({}))
@@ -552,7 +577,7 @@ mod tests {
 
     use crate::domain::model::{
         ApiOperation, ApiOperationGroup, BodySpec, HttpMethod, ModelVersion, Param, ResponseSpec,
-        SchemaProperty, SchemaSpec,
+        SchemaSpec,
     };
 
     fn sample_model() -> ApiModel {
@@ -586,6 +611,7 @@ mod tests {
                         content_type: "application/json".to_owned(),
                         schema: Some(SchemaSpec::Object {
                             properties: BTreeMap::new(),
+                            extra_json: None,
                         }),
                     }),
                     responses: vec![],
@@ -605,21 +631,20 @@ mod tests {
                     properties: BTreeMap::from([
                         (
                             "id".to_owned(),
-                            SchemaProperty {
-                                schema: SchemaSpec::Integer,
-                                required: true,
-                                description: Some("Order id".to_owned()),
+                            SchemaSpec::Primitive {
+                                raw_json:
+                                    r#"{"description":"Order id","minimum":1,"type":"integer"}"#
+                                        .to_owned(),
                             },
                         ),
                         (
                             "petId".to_owned(),
-                            SchemaProperty {
-                                schema: SchemaSpec::Integer,
-                                required: false,
-                                description: None,
+                            SchemaSpec::Primitive {
+                                raw_json: r#"{"type":"integer"}"#.to_owned(),
                             },
                         ),
                     ]),
+                    extra_json: Some(r#"{"required":["id"]}"#.to_owned()),
                 },
             )]),
             operation_groups: vec![ApiOperationGroup {
@@ -858,6 +883,8 @@ mod tests {
         let footer = footer.unwrap();
         assert!(footer.contains("schema: {\"properties\":"), "{footer}");
         assert!(footer.contains("\"description\":\"Order id\""), "{footer}");
+        assert!(footer.contains("\"minimum\":1"), "{footer}");
+        assert!(footer.contains("\"required\":[\"id\"]"), "{footer}");
         assert!(!footer.contains("\"$ref\""), "{footer}");
     }
 
@@ -872,14 +899,11 @@ mod tests {
                 SchemaSpec::Object {
                     properties: BTreeMap::from([(
                         "next".to_owned(),
-                        SchemaProperty {
-                            schema: SchemaSpec::Ref {
-                                ref_id: "Node".to_owned(),
-                            },
-                            required: false,
-                            description: None,
+                        SchemaSpec::Ref {
+                            ref_id: "Node".to_owned(),
                         },
                     )]),
+                    extra_json: None,
                 },
             )]),
             operation_groups: vec![],

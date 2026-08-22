@@ -23,10 +23,10 @@ related:
 
 Agreed design decisions:
 
-- **Typed schemas, not raw JSON.** `SchemaSpec` is a tagged enum covering the data types (object, array, number/integer, string, boolean), plus `Ref`, `Composite`, and `Unknown`. Registry values and operation body schemas use the same type. No raw JSON is kept in the registry.
+- **Typed schema tree without child duplication.** `SchemaSpec` is a tagged enum with structural variants (`Object`, `Array`, `Composite`, `Ref`) enabling tree navigation and `$ref` expansion, plus leaf variants (`Primitive`, `Unknown`). Leaf nodes preserve their complete `raw_json` payload, while compound nodes store child schemas structurally and preserve only unmodeled metadata in `extra_json` (e.g. `required` lists, `minItems`, `description`) to eliminate payload duplication in the stored model.
 - **Refs are referenced, not inlined.** Local `#/components/schemas/...` refs become `Ref { ref_id }` pointing at the registry; nested refs stay as `Ref` (cycle-safe at learn time by construction). Full expansion happens only at help-render time, cycle-guarded.
 - **Footer shows the resolved tree.** `--help` prints a compact JSON-schema representation of the request body schema tree with refs fully expanded (cycle points render as `{"$ref": ...}` markers). No responses line in the footer.
-- **`Composite` collapses allOf/oneOf/anyOf** into a single variant (the specific keyword is dropped; a `kind` field can be added later). Anything else (nullable, untyped, external refs) falls back to `Unknown { raw_json }`, which preserves the original JSON for display.
+- **Structural navigation merges node payloads.** `Object` merges rendered child property schemas into its `extra_json`; `Array` merges rendered item schemas into its `extra_json`; `Composite` merges rendered branches into its keyword array (`oneOf`/`allOf`/`anyOf`). Primitives and unknown nodes render their raw JSON directly.
 - v0: no backward-compatibility or migration concern; the stored model shape may change freely. `ModelVersion` stays `V1`.
 
 ## Task Details
@@ -36,25 +36,22 @@ Agreed design decisions:
 - **Prerequisites / Dependencies:** none.
 - **Affected Files:**
   - `src/domain/model.rs`
-- **Affected Symbols:** `SchemaSpec`, `SchemaProperty`, `ResponseSpec`, `BodySpec`, `ApiOperation`, `ApiModel`, `ApiModel::schema_by_ref_id`
+- **Affected Symbols:** `SchemaSpec`, `CompositeKind`, `ResponseSpec`, `BodySpec`, `ApiOperation`, `ApiModel`, `ApiModel::schema_by_ref_id`
 - **Description:**
+  - `CompositeKind`: `AllOf`, `OneOf`, `AnyOf`.
   - `SchemaSpec` (serde `tag = "kind"`, `rename_all = "snake_case"`):
 
     ```rust
     pub enum SchemaSpec {
         Ref { ref_id: String },
-        Object { properties: BTreeMap<String, SchemaProperty> },
-        Array { items: Option<Box<SchemaSpec>> },
-        Integer,
-        Number,
-        String,
-        Boolean,
-        Composite { schemas: Vec<SchemaSpec> },
+        Object { properties: BTreeMap<String, SchemaSpec>, extra_json: Option<String> },
+        Array { items: Option<Box<SchemaSpec>>, extra_json: Option<String> },
+        Primitive { raw_json: String },
+        Composite { composite_kind: CompositeKind, schemas: Vec<SchemaSpec>, extra_json: Option<String> },
         Unknown { raw_json: String },
     }
     ```
 
-  - `SchemaProperty { schema: SchemaSpec, required: bool, description: Option<String> }` (`required` derived from the object's `required` name list during parsing; `description` from the property's own `description`).
   - `BodySpec`: replace `schema_json: Option<String>` with `schema: Option<SchemaSpec>` — inline schemas use the same typed type as registry values.
   - `ResponseSpec { status_code: String, content_type: String, schema: Option<SchemaSpec> }`.
   - `ApiOperation`: add `responses: Vec<ResponseSpec>`.
@@ -89,10 +86,10 @@ Agreed design decisions:
   - `local_schema_ref_name(ref_str) -> Option<String>`: trailing name for `#/components/schemas/<name>`, else `None`.
   - `parse_schema(value) -> SchemaSpec`:
     - `$ref`: local schema ref → `Ref { ref_id }`; any other ref → `Unknown { raw_json: value.to_string() }`.
-    - `type: "object"` (or no `type` but `properties` present) → `Object`; each property → `SchemaProperty { schema: parse_schema(prop), required: name ∈ "required" list, description: prop.description }`.
-    - `type: "array"` → `Array { items: Option<Box<SchemaSpec>> }`.
-    - `type` string/integer/number/boolean → unit variants.
-    - `allOf` / `oneOf` / `anyOf` → `Composite { schemas }` (branches parsed recursively; keyword dropped).
+    - `type: "object"` (or no `type` but `properties` present) → `Object { properties, extra_json }` (properties removed from extra metadata).
+    - `type: "array"` → `Array { items, extra_json }` (items removed from extra metadata).
+    - `type` string/integer/number/boolean → `Primitive { raw_json: value.to_string() }`.
+    - `allOf` / `oneOf` / `anyOf` → `Composite { composite_kind, schemas, extra_json }` (composite keyword array removed from extra metadata).
     - everything else → `Unknown { raw_json: value.to_string() }`.
   - Registry: convert each `components.schemas` entry with `parse_schema`; **refs preserved as `Ref`, never inlined** (cycle-safe at learn time by construction).
   - `to_body_spec`: use `parse_schema` for `media.schema`.
@@ -101,8 +98,8 @@ Agreed design decisions:
 - **Acceptance Criteria:**
   - [x] Request-body `$ref` → `BodySpec.schema == Ref { ref_id }`; registry entry typed.
   - [x] Nested refs preserved as `Ref` (not inlined).
-  - [x] Object properties map to `SchemaProperty` with required flag + description.
-  - [x] Array/scalar conversions; `Composite` from allOf/oneOf/anyOf; `Unknown { raw_json }` for untyped and non-local refs.
+  - [x] Object properties, array items, and composite branches navigate recursively without duplicating payloads.
+  - [x] Node constraints (min, max, format, default, description) preserved in `raw_json` / `extra_json`.
   - [x] Cycle-safe: a self-referencing schema parses with `Ref` preserved (no recursion).
   - [x] Response schemas captured per (status, content-type) for both ref and inline schemas.
 
@@ -118,16 +115,16 @@ Agreed design decisions:
   - `render_body_schema(model, &body.schema) -> String`: `None` → `"unknown"`; else compact-serialize `render_schema`.
   - `render_schema(spec, model, seen: &mut Vec<String>) -> serde_json::Value` (path-stack cycle guard):
     - `Ref` → if `ref_id ∈ seen` or registry lookup misses, emit `{"$ref":"#/components/schemas/<id>"}`; else push id, render target, pop.
-    - `Object` → `{"type":"object","properties":{ name: render(prop.schema) (+ "description" when present, + "required" boolean) }}`; `properties` omitted when empty so an inline empty object renders exactly `{"type":"object"}`.
-    - `Array` → `{"type":"array"}` (+ `"items"` when present).
-    - `Integer`/`Number`/`String`/`Boolean` → `{"type":"integer"}` etc.
-    - `Composite` → `{"composite":[...]}`.
-    - `Unknown { raw_json }` → the wrapped JSON embedded as-is (fallback `{}` if unparseable).
+    - `Object` → parsed `extra_json` with `"properties"` updated to recursively rendered properties map.
+    - `Array` → parsed `extra_json` with `"items"` updated to recursively rendered item schema.
+    - `Primitive` / `Unknown` → parsed `raw_json` as-is.
+    - `Composite` → parsed `extra_json` with `"oneOf"`/`"allOf"`/`"anyOf"` updated with recursively rendered branch schemas.
   - Note: rendered JSON keys are alphabetically sorted (serde_json's default `BTreeMap`-backed `Map`).
 - **Acceptance Criteria:**
   - [x] A `Ref` body renders the fully-expanded registry tree (no raw `$ref` at the top level).
   - [x] Inline `{"type":"object"}` still renders `schema: {"type":"object"}`.
   - [x] Cyclic schemas terminate with a `$ref` marker at the cycle point.
+  - [x] Common constraints and hints (min, max, format, default, required list) are rendered in the schema JSON.
   - [x] `Unknown` renders its wrapped raw JSON.
 
 ### 5. Update model-construction touchpoints

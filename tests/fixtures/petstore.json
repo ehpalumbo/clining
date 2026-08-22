@@ -12,9 +12,9 @@
         "type": "object",
         "required": ["id"],
         "properties": {
-          "id": { "type": "integer", "description": "Order id" },
+          "id": { "type": "integer", "description": "Order id", "minimum": 1 },
           "petId": { "type": "integer" },
-          "quantity": { "type": "integer", "description": "Number of units" }
+          "quantity": { "type": "integer", "description": "Number of units", "minimum": 1, "default": 1 }
         }
       }
     }
