@@ -6,6 +6,19 @@
     { "name": "pets", "description": "Everything about your pets" },
     { "name": "store", "description": "Access to store orders" }
   ],
+  "components": {
+    "schemas": {
+      "Order": {
+        "type": "object",
+        "required": ["id"],
+        "properties": {
+          "id": { "type": "integer", "description": "Order id", "minimum": 1 },
+          "petId": { "type": "integer" },
+          "quantity": { "type": "integer", "description": "Number of units", "minimum": 1, "default": 1 }
+        }
+      }
+    }
+  },
   "paths": {
     "/pets": {
       "get": {
@@ -33,6 +46,13 @@
           "content": {
             "application/json": { "schema": { "type": "object" } }
           }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": { "schema": { "type": "object" } }
+            }
+          }
         }
       }
     },
@@ -55,6 +75,13 @@
           "required": true,
           "content": {
             "application/json": { "schema": { "$ref": "#/components/schemas/Order" } }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Order" } }
+            }
           }
         }
       }

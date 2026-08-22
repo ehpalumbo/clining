@@ -81,6 +81,7 @@ mod tests {
                 name: String::new(),
                 base_url: "https://from-parser.example.com".to_owned(),
                 version: ModelVersion::V1,
+                schema_registry: std::collections::BTreeMap::new(),
                 operation_groups: vec![],
             })
         }
