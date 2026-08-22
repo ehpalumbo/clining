@@ -8,7 +8,7 @@ tags:
   - "phase-1"
 timestamp: "2026-08-17T19:47:50Z"
 related:
-  - "[Phased Implementation Plan](../implementation-plan.md)"
+  - "[Phased Implementation Plan](../../plans/implementation-plan.md)"
 ---
 
 # Phase 1 — Toolchain & Onion Scaffolding
