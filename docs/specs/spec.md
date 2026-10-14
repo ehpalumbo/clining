@@ -26,7 +26,7 @@ Platform target: **Linux only**, implemented in **Rust**, organized with **onion
 
 | Command | Meaning |
 | --- | --- |
-| `clining install <name> <path-or-uri> [--base-url <url>]` | One-off setup: fetch the spec, parse it, persist the API model. |
+| `clining install <name> <path-or-uri> [--base-url <url>] [--token-env <VAR> \| --token-file <path>]` | One-off setup: fetch the spec, parse it, persist the API model with an optional Bearer token reference. |
 | `clining <name> <group> <command> [--param value]... [< body.json]` | Invoke an endpoint. |
 | `clining <name> --help` | List command groups for the API. |
 | `clining <name> <group> --help` | List commands in the group. |
@@ -41,6 +41,7 @@ Platform target: **Linux only**, implemented in **Rust**, organized with **onion
 - FR-1.3 The parsed model is persisted locally (see FR-5). Re-installing an existing name overwrites it.
 - FR-1.4 `--base-url` overrides the base URL taken from `servers[0].url` and is stored in the model.
 - FR-1.5 Success prints a confirmation with the number of command groups and commands.
+- FR-1.6 `--token-env <VAR>` or `--token-file <path>` (mutually exclusive) records where the Bearer token lives. Only the reference is persisted, never the secret. The source must be resolvable at install (fail-fast, nothing persisted) and is re-resolved at every invocation. Re-installing without either flag clears auth.
 
 ### FR-2 Model & Command Naming
 
@@ -59,6 +60,7 @@ Platform target: **Linux only**, implemented in **Rust**, organized with **onion
 - FR-3.4 The HTTP status line and response headers are written to **stderr**.
 - FR-3.5 Exit code is `0` for 2xx responses and `1` for any non-2xx response.
 - FR-3.6 Validation is **presence-only**: required path/query params and a required body must be supplied; a body supplied for an endpoint that declares none is rejected. Schemas are stored and shown in help but not enforced in v0.
+- FR-3.7 When the model carries an auth reference, the token is resolved at invocation time (env var verbatim; file with trailing newline trimmed) and sent as `Authorization: Bearer <token>` on every request. Unresolvable sources fail with `error:` on stderr and exit non-zero without sending the request. The token value never appears in the model file, logs, help, or stderr.
 
 ### FR-4 Discovery
 
@@ -87,6 +89,7 @@ Platform target: **Linux only**, implemented in **Rust**, organized with **onion
 | Invalid stored model | Model file exists but is unparseable/corrupt | stderr with file path + reason; exit 1 |
 | Invalid spec | Spec source missing/unreadable or not OpenAPI 3.0.x | stderr; exit 1; nothing persisted |
 | Parameter/body errors | Required param/body missing, or body supplied where none declared | stderr; exit 1; request not sent |
+| Auth errors | Token source unresolvable (var unset/empty, file missing/unreadable/empty) or both token flags supplied | stderr; exit 1; request not sent (install persists nothing) |
 | Network/I-O errors | Fetch, HTTP, or filesystem failure | stderr with context; exit 1 |
 
 All errors go to stderr as a one-line `error: <message>`; all failure paths exit non-zero.
@@ -102,7 +105,7 @@ All errors go to stderr as a one-line `error: <message>`; all failure paths exit
 ## Out of Scope (v0)
 
 - JSON Schema validation of request bodies and parameter values (presence-only only).
-- Authentication/authorization handling (API keys, OAuth, etc.).
+- Auth beyond Bearer tokens via env var or token file (no API keys, OAuth flows, etc.).
 - OpenAPI 3.1 and 2.0 (Swagger) support.
 - Async/concurrent execution.
 - Convenience features such as `clining list`, command aliases, and shell tab-completion.
