@@ -89,7 +89,8 @@ Platform target: **Linux only**, implemented in **Rust**, organized with **onion
 | Invalid stored model | Model file exists but is unparseable/corrupt | stderr with file path + reason; exit 1 |
 | Invalid spec | Spec source missing/unreadable or not OpenAPI 3.0.x | stderr; exit 1; nothing persisted |
 | Parameter/body errors | Required param/body missing, or body supplied where none declared | stderr; exit 1; request not sent |
-| Auth errors | Token source unresolvable (var unset/empty, file missing/unreadable/empty) or both token flags supplied | stderr; exit 1; request not sent (install persists nothing) |
+| Auth errors | Token source unresolvable (var unset/empty, file missing/unreadable/empty) | stderr; exit 1; request not sent (install persists nothing) |
+| Usage errors | Mutually exclusive flags supplied together (e.g. both `--token-env` and `--token-file`) | clap usage error on stderr; exit 2; request not sent (install persists nothing) |
 | Network/I-O errors | Fetch, HTTP, or filesystem failure | stderr with context; exit 1 |
 
 All errors go to stderr as a one-line `error: <message>`; all failure paths exit non-zero.
@@ -101,6 +102,7 @@ All errors go to stderr as a one-line `error: <message>`; all failure paths exit
 | 2xx | response body (byte-exact) | status line + headers | 0 |
 | non-2xx | response body (byte-exact) | status line + headers | 1 |
 | CLI/spec/model/network error | — | `error: <message>` | 1 |
+| CLI usage error (e.g. conflicting flags) | — | clap usage message | 2 |
 
 ## Out of Scope (v0)
 

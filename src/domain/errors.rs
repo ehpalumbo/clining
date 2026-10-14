@@ -1,5 +1,5 @@
 //! Domain error vocabulary: not found, invalid stored model, invalid spec,
-//! parameter/body errors, network, and I/O.
+//! parameter/body errors, auth errors, network, and I/O.
 
 use thiserror::Error;
 

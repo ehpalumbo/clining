@@ -80,8 +80,15 @@ fn install_command() -> Command {
 /// current working directory so the stored `AuthConfig::File` reference stays
 /// valid when later invocations run from a different directory. Joining (not
 /// `fs::canonicalize`) preserves the user's path text and needs no existence
-/// proof beyond the fail-fast resolve at install.
+/// proof beyond the fail-fast resolve at install. An empty value is a
+/// `Parameter` error (checked here so `--token-file ""` cannot collapse to
+/// the working directory itself via `Path::join`).
 fn resolve_token_file_path(path: &str) -> Result<String, DomainError> {
+    if path.is_empty() {
+        return Err(DomainError::Parameter {
+            message: "token file path must not be empty".to_owned(),
+        });
+    }
     let candidate = std::path::Path::new(path);
     if candidate.is_absolute() {
         return Ok(path.to_owned());
@@ -872,6 +879,18 @@ mod tests {
         let cwd = std::env::current_dir().unwrap();
         let joined = cwd.join("rel/tok.txt").to_string_lossy().into_owned();
         assert_eq!(resolve_token_file_path("rel/tok.txt").unwrap(), joined);
+    }
+
+    #[test]
+    fn token_file_empty_path_is_parameter_error() {
+        // Empty must not collapse to the cwd via `Path::join` (which would
+        // later fail confusingly as "Is a directory"); it is a usage error.
+        let err = resolve_token_file_path("").unwrap_err();
+        assert!(
+            matches!(err, crate::domain::errors::DomainError::Parameter { .. }),
+            "{err}"
+        );
+        assert!(err.to_string().contains("must not be empty"), "{err}");
     }
 
     #[test]
