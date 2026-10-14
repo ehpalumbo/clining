@@ -32,8 +32,21 @@ pub fn temp_dir(tag: &str) -> PathBuf {
 
 /// Runs the compiled binary with an isolated store and optional stdin bytes.
 pub fn run_cli(dir: &Path, args: &[&str], stdin: Option<&[u8]>) -> Output {
+    run_cli_with_envs(dir, args, stdin, &[])
+}
+
+/// Runs the compiled binary with extra environment variables set.
+pub fn run_cli_with_envs(
+    dir: &Path,
+    args: &[&str],
+    stdin: Option<&[u8]>,
+    envs: &[(&str, &str)],
+) -> Output {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_clining"));
     cmd.args(args).env("CLINING_DIR", dir);
+    for (k, v) in envs {
+        cmd.env(k, v);
+    }
     let stdin_mode = if stdin.is_some() {
         Stdio::piped()
     } else {

@@ -1,6 +1,7 @@
 //! "Invoke operation" use case: build and send the HTTP request for an
 //! `ApiInvocationRequest`.
 
+use crate::application::auth::resolve_token;
 use crate::application::ports::HttpInvoker;
 use crate::application::request_builder::build_request;
 use crate::domain::errors::DomainError;
@@ -19,16 +20,19 @@ impl ApiInvocationService {
     }
 
     /// Builds the HTTP request from the invocation and sends it, returning the
-    /// raw response.
+    /// raw response. When the invocation carries an auth reference, the token
+    /// is resolved first; resolution failure returns without sending.
     pub fn invoke(
         &self,
         invocation: &ApiInvocationRequest<'_>,
     ) -> Result<HttpResponse, DomainError> {
+        let token = invocation.auth.as_ref().map(resolve_token).transpose()?;
         let request = build_request(
             &invocation.base_url,
             invocation.operation,
             &invocation.params,
             invocation.body.as_deref(),
+            token.as_deref(),
         )?;
         self.invoker.send(&request)
     }
@@ -43,7 +47,8 @@ mod tests {
     use std::rc::Rc;
 
     use crate::domain::model::{
-        ApiModel, ApiOperation, ApiOperationGroup, HttpMethod, HttpRequest, ModelVersion, Param,
+        ApiModel, ApiOperation, ApiOperationGroup, AuthConfig, HttpMethod, HttpRequest,
+        ModelVersion, Param,
     };
 
     fn sample_model() -> ApiModel {
@@ -52,6 +57,7 @@ mod tests {
             base_url: "https://api.example.com/v1".to_owned(),
             version: ModelVersion::V1,
             schema_registry: std::collections::BTreeMap::new(),
+            auth: None,
             operation_groups: vec![ApiOperationGroup {
                 name: "pets".to_owned(),
                 description: None,
@@ -88,7 +94,13 @@ mod tests {
         params: HashMap<String, Vec<String>>,
         body: Option<Vec<u8>>,
     ) -> ApiInvocationRequest<'m> {
-        ApiInvocationRequest::new(model.base_url.clone(), operation(model), params, body)
+        ApiInvocationRequest::new(
+            model.base_url.clone(),
+            operation(model),
+            params,
+            body,
+            model.auth.clone(),
+        )
     }
 
     struct FakeInvoker {
@@ -140,5 +152,57 @@ mod tests {
             .invoke(&request(&model, HashMap::new(), None))
             .unwrap_err();
         assert!(matches!(err, DomainError::Parameter { .. }), "{err}");
+    }
+
+    #[test]
+    fn auth_header_attached_from_file() {
+        let dir = std::env::temp_dir().join(format!("clining-invoke-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let token_path = dir.join("token.txt");
+        std::fs::write(&token_path, b"file-secret\n").unwrap();
+        let (svc, captured) = service();
+        let mut model = sample_model();
+        model.auth = Some(AuthConfig::File {
+            path: token_path.display().to_string(),
+        });
+        let params = HashMap::from([("pet-id".to_owned(), vec!["42".to_owned()])]);
+        let resp = svc.invoke(&request(&model, params, None)).unwrap();
+        assert_eq!(resp.status, 200);
+        let sent = captured.borrow().clone().unwrap();
+        assert!(
+            sent.headers
+                .iter()
+                .any(|(k, v)| k == "Authorization" && v == "Bearer file-secret")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn unresolvable_auth_sends_nothing() {
+        struct FailingInvoker {
+            called: Rc<RefCell<bool>>,
+        }
+        impl HttpInvoker for FailingInvoker {
+            fn send(&self, _request: &HttpRequest) -> Result<HttpResponse, DomainError> {
+                *self.called.borrow_mut() = true;
+                Ok(HttpResponse {
+                    status: 200,
+                    headers: vec![],
+                    body: vec![],
+                })
+            }
+        }
+        let called = Rc::new(RefCell::new(false));
+        let svc = ApiInvocationService::new(FailingInvoker {
+            called: Rc::clone(&called),
+        });
+        let mut model = sample_model();
+        model.auth = Some(AuthConfig::Env {
+            var: "CLINING_TEST_MISSING_VAR_XYZ".to_owned(),
+        });
+        let params = HashMap::from([("pet-id".to_owned(), vec!["42".to_owned()])]);
+        let err = svc.invoke(&request(&model, params, None)).unwrap_err();
+        assert!(matches!(err, DomainError::Auth { .. }), "{err}");
+        assert!(!*called.borrow());
     }
 }

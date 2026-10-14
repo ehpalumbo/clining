@@ -31,6 +31,9 @@ pub enum DomainError {
     #[error("network error: {message}")]
     Network { message: String },
 
+    #[error("auth error: {message}")]
+    Auth { message: String },
+
     #[error("I/O error: {message}")]
     Io { message: String },
 }

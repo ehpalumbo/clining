@@ -133,6 +133,7 @@ impl Parser {
             base_url,
             version: ModelVersion::V1,
             schema_registry,
+            auth: None,
             operation_groups,
         }
     }
