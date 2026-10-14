@@ -42,8 +42,23 @@ pub fn run_cli_with_envs(
     stdin: Option<&[u8]>,
     envs: &[(&str, &str)],
 ) -> Output {
+    run_cli_with_envs_in_cwd(dir, dir, args, stdin, envs)
+}
+
+/// Runs the compiled binary with an explicit subprocess working directory.
+///
+/// `dir` is the isolated model store (`CLINING_DIR`); `cwd` is the process
+/// working directory, so install-time relative `--token-file` paths can be
+/// exercised across different directories.
+pub fn run_cli_with_envs_in_cwd(
+    dir: &Path,
+    cwd: &Path,
+    args: &[&str],
+    stdin: Option<&[u8]>,
+    envs: &[(&str, &str)],
+) -> Output {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_clining"));
-    cmd.args(args).env("CLINING_DIR", dir);
+    cmd.args(args).env("CLINING_DIR", dir).current_dir(cwd);
     for (k, v) in envs {
         cmd.env(k, v);
     }

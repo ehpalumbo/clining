@@ -4,7 +4,10 @@
 
 mod common;
 
-use common::{MockServer, install, request_text, run_cli, run_cli_with_envs, temp_dir};
+use common::{
+    MockServer, install, request_text, run_cli, run_cli_with_envs, run_cli_with_envs_in_cwd,
+    temp_dir,
+};
 use std::fs;
 
 fn server_base(server: &MockServer) -> String {
@@ -267,6 +270,76 @@ fn reinstall_without_flags_clears_auth() {
     );
     let sent = request_text(&server.request(0)).to_ascii_lowercase();
     assert!(!sent.contains("authorization:"), "{sent}");
+
+    server.handle.join().unwrap();
+}
+
+#[test]
+fn relative_token_file_is_stored_absolute_and_invokable_from_other_cwd() {
+    let store = temp_dir("auth-rel");
+    let work_a = store.join("a");
+    let work_b = store.join("b");
+    fs::create_dir_all(&work_a).unwrap();
+    fs::create_dir_all(&work_b).unwrap();
+
+    let server = MockServer::start(1);
+    let base = server_base(&server);
+
+    let spec = store.join("spec.json");
+    fs::write(&spec, common::fixture_spec()).unwrap();
+    fs::write(work_a.join("tok.txt"), b"rel-secret-789\n").unwrap();
+
+    let base_arg = format!("--base-url={base}");
+    let out = run_cli_with_envs_in_cwd(
+        &store,
+        &work_a,
+        &[
+            "install",
+            "pets",
+            spec.to_str().unwrap(),
+            &base_arg,
+            "--token-file=tok.txt",
+        ],
+        None,
+        &[],
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let model_raw = fs::read_to_string(store.join("pets.json")).unwrap();
+    let model: serde_json::Value = serde_json::from_str(&model_raw).unwrap();
+    let stored_path = model["auth"]["path"].as_str().unwrap().to_owned();
+    assert!(
+        std::path::Path::new(&stored_path).is_absolute(),
+        "{stored_path}"
+    );
+    assert_eq!(
+        stored_path,
+        work_a.join("tok.txt").to_string_lossy(),
+        "{stored_path}"
+    );
+    assert!(!model_raw.contains("rel-secret-789"), "{model_raw}");
+
+    let invoke = run_cli_with_envs_in_cwd(
+        &store,
+        &work_b,
+        &["pets", "pets", "get-pet", "--pet-id", "42"],
+        None,
+        &[],
+    );
+    assert!(
+        invoke.status.success(),
+        "{}",
+        String::from_utf8_lossy(&invoke.stderr)
+    );
+    let sent = request_text(&server.request(0)).to_ascii_lowercase();
+    assert!(
+        sent.contains("authorization: bearer rel-secret-789"),
+        "{sent}"
+    );
 
     server.handle.join().unwrap();
 }

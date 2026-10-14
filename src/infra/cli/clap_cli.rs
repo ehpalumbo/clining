@@ -68,8 +68,28 @@ fn install_command() -> Command {
                 .long("token-file")
                 .value_name("PATH")
                 .conflicts_with("token_env")
-                .help("Read Bearer token from file PATH (stored as reference only)."),
+                .help(
+                    "Read Bearer token from file PATH (stored as reference only; relative paths are stored as absolute at install time).",
+                ),
         )
+}
+
+/// Resolves a `--token-file` value to the path persisted in the model.
+///
+/// Absolute paths pass through verbatim; relative paths are joined onto the
+/// current working directory so the stored `AuthConfig::File` reference stays
+/// valid when later invocations run from a different directory. Joining (not
+/// `fs::canonicalize`) preserves the user's path text and needs no existence
+/// proof beyond the fail-fast resolve at install.
+fn resolve_token_file_path(path: &str) -> Result<String, DomainError> {
+    let candidate = std::path::Path::new(path);
+    if candidate.is_absolute() {
+        return Ok(path.to_owned());
+    }
+    let cwd = std::env::current_dir().map_err(|e| DomainError::Io {
+        message: format!("failed to resolve current directory: {e}"),
+    })?;
+    Ok(cwd.join(candidate).to_string_lossy().into_owned())
 }
 
 /// Stand-in for the dynamic per-API subcommand, shown when no model is loaded.
@@ -332,7 +352,17 @@ impl CliApp {
         let base_url = install.get_one::<String>("base_url").map(String::as_str);
         let token_env = install.get_one::<String>("token_env").map(String::as_str);
         let token_file = install.get_one::<String>("token_file").map(String::as_str);
-        let auth = match auth_from_options(token_env, token_file) {
+        let normalized_token_file: Option<String> = match token_file {
+            Some(path) => match resolve_token_file_path(path) {
+                Ok(absolute) => Some(absolute),
+                Err(err) => {
+                    eprintln!("error: {err}");
+                    return ExitCode::FAILURE;
+                }
+            },
+            None => None,
+        };
+        let auth = match auth_from_options(token_env, normalized_token_file.as_deref()) {
             Ok(auth) => auth,
             Err(err) => {
                 eprintln!("error: {err}");
@@ -826,6 +856,22 @@ mod tests {
         let help = install.render_help().to_string();
         assert!(help.contains("--token-env"), "{help}");
         assert!(help.contains("--token-file"), "{help}");
+        assert!(help.contains("stored as absolute"), "{help}");
+    }
+
+    #[test]
+    fn token_file_absolute_path_passes_through() {
+        assert_eq!(
+            resolve_token_file_path("/tmp/token.txt").unwrap(),
+            "/tmp/token.txt"
+        );
+    }
+
+    #[test]
+    fn token_file_relative_path_joins_current_dir() {
+        let cwd = std::env::current_dir().unwrap();
+        let joined = cwd.join("rel/tok.txt").to_string_lossy().into_owned();
+        assert_eq!(resolve_token_file_path("rel/tok.txt").unwrap(), joined);
     }
 
     #[test]

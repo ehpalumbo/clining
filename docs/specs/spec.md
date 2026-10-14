@@ -41,7 +41,7 @@ Platform target: **Linux only**, implemented in **Rust**, organized with **onion
 - FR-1.3 The parsed model is persisted locally (see FR-5). Re-installing an existing name overwrites it.
 - FR-1.4 `--base-url` overrides the base URL taken from `servers[0].url` and is stored in the model.
 - FR-1.5 Success prints a confirmation with the number of command groups and commands.
-- FR-1.6 `--token-env <VAR>` or `--token-file <path>` (mutually exclusive) records where the Bearer token lives. Only the reference is persisted, never the secret. The source must be resolvable at install (fail-fast, nothing persisted) and is re-resolved at every invocation. Re-installing without either flag clears auth.
+- FR-1.6 `--token-env <VAR>` or `--token-file <path>` (mutually exclusive) records where the Bearer token lives. Only the reference is persisted, never the secret. Relative `--token-file` paths are stored as absolute at install time. The source must be resolvable at install (fail-fast, nothing persisted) and is re-resolved at every invocation. Re-installing without either flag clears auth.
 
 ### FR-2 Model & Command Naming
 
