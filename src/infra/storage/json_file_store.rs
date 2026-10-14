@@ -85,6 +85,7 @@ mod tests {
             base_url: "https://example.com".to_owned(),
             version: ModelVersion::V1,
             schema_registry: std::collections::BTreeMap::new(),
+            auth: None,
             operation_groups: vec![ApiOperationGroup {
                 name: "default".to_owned(),
                 description: None,
@@ -141,5 +142,43 @@ mod tests {
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
             .collect();
         assert_eq!(entries, vec!["pets.json"]);
+    }
+
+    #[test]
+    fn auth_reference_roundtrips_and_never_stores_secret() {
+        use crate::domain::model::AuthConfig;
+        let root = temp_root("auth-roundtrip");
+        let store = JsonFileStore::new(root.clone());
+        let mut model = sample_model("pets");
+        model.auth = Some(AuthConfig::Env {
+            var: "MY_API_TOKEN".to_owned(),
+        });
+        store.save(&model).unwrap();
+        let loaded = store.load_by_name("pets").unwrap();
+        assert_eq!(loaded.auth, model.auth);
+        let raw = fs::read_to_string(root.join("pets.json")).unwrap();
+        assert!(raw.contains("MY_API_TOKEN"), "{raw}");
+        assert!(!raw.contains("secret"), "{raw}");
+
+        let mut file_model = sample_model("fileapi");
+        file_model.auth = Some(AuthConfig::File {
+            path: "/tmp/token.txt".to_owned(),
+        });
+        store.save(&file_model).unwrap();
+        assert_eq!(store.load_by_name("fileapi").unwrap().auth, file_model.auth);
+    }
+
+    #[test]
+    fn model_without_auth_field_loads_as_none() {
+        // Backward compat: models written before auth existed have no key.
+        let root = temp_root("auth-backcompat");
+        fs::write(
+            root.join("pets.json"),
+            br#"{"name":"pets","base_url":"https://example.com","version":"V1","operation_groups":[]}"#,
+        )
+        .unwrap();
+        let store = JsonFileStore::new(root);
+        let loaded = store.load_by_name("pets").unwrap();
+        assert_eq!(loaded.auth, None);
     }
 }

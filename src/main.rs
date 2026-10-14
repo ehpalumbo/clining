@@ -9,6 +9,7 @@ use std::process::ExitCode;
 
 use application::api_invocation::ApiInvocationService;
 use application::api_model::ApiModelService;
+use infra::auth::LocalTokenSource;
 use infra::cli::clap_cli::CliApp;
 use infra::http::reqwest_http::ReqwestHttpClient;
 use infra::openapi::parser::Parser;
@@ -34,8 +35,8 @@ fn main() -> ExitCode {
         }
     };
 
-    let models = ApiModelService::new(SourceLoader, Parser, store);
-    let invoke_service = ApiInvocationService::new(invoker);
+    let models = ApiModelService::new(SourceLoader, Parser, store, LocalTokenSource);
+    let invoke_service = ApiInvocationService::new(invoker, LocalTokenSource);
 
     CliApp::new(models, invoke_service).run()
 }

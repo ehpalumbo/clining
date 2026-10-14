@@ -1,5 +1,5 @@
 //! Domain error vocabulary: not found, invalid stored model, invalid spec,
-//! parameter/body errors, network, and I/O.
+//! parameter/body errors, auth errors, network, and I/O.
 
 use thiserror::Error;
 
@@ -30,6 +30,9 @@ pub enum DomainError {
 
     #[error("network error: {message}")]
     Network { message: String },
+
+    #[error("auth error: {message}")]
+    Auth { message: String },
 
     #[error("I/O error: {message}")]
     Io { message: String },

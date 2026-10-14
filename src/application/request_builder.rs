@@ -8,14 +8,17 @@ use crate::domain::errors::DomainError;
 use crate::domain::model::{ApiOperation, HttpRequest};
 
 /// Builds a fully-specified `HttpRequest` from an operation, supplied values,
-/// and an optional body. Values are keyed by the CLI parameter name
-/// (`Param::cli_name`); path and query parameters are resolved back to their
-/// original spec names during substitution.
+/// an optional body, and an optional resolved bearer token. Values are keyed
+/// by the CLI parameter name (`Param::cli_name`); path and query parameters
+/// are resolved back to their original spec names during substitution.
+/// When `token` is `Some`, an `Authorization: Bearer <token>` header is
+/// appended (the token must already be resolved; this function performs no I/O).
 pub fn build_request(
     base_url: &str,
     operation: &ApiOperation,
     values: &HashMap<String, Vec<String>>,
     body: Option<&[u8]>,
+    token: Option<&str>,
 ) -> Result<HttpRequest, DomainError> {
     let body = body.filter(|b| !b.is_empty());
     let url = build_url(base_url, operation, values)?;
@@ -27,6 +30,9 @@ pub fn build_request(
         ),
         ("Accept".to_owned(), "application/json".to_owned()),
     ];
+    if let Some(token) = token {
+        headers.push(("Authorization".to_owned(), format!("Bearer {token}")));
+    }
 
     match &operation.request_body {
         Some(spec) => {
@@ -183,7 +189,14 @@ mod tests {
             ("pet-id".to_owned(), vec!["123".to_owned()]),
             ("status".to_owned(), vec!["available".to_owned()]),
         ]);
-        let req = build_request("https://api.example.com/v1/", &operation, &values, None).unwrap();
+        let req = build_request(
+            "https://api.example.com/v1/",
+            &operation,
+            &values,
+            None,
+            None,
+        )
+        .unwrap();
         assert_eq!(req.method, HttpMethod::Post);
         assert_eq!(
             req.url,
@@ -209,7 +222,8 @@ mod tests {
             "status".to_owned(),
             vec!["available".to_owned(), "sold".to_owned()],
         )]);
-        let req = build_request("https://api.example.com", &operation, &values, None).unwrap();
+        let req =
+            build_request("https://api.example.com", &operation, &values, None, None).unwrap();
         assert_eq!(
             req.url,
             "https://api.example.com/pets?status=available&status=sold"
@@ -223,7 +237,8 @@ mod tests {
             ("pet-id".to_owned(), vec!["a/b c".to_owned()]),
             ("status".to_owned(), vec!["x&y=1".to_owned()]),
         ]);
-        let req = build_request("https://api.example.com", &operation, &values, None).unwrap();
+        let req =
+            build_request("https://api.example.com", &operation, &values, None, None).unwrap();
         assert_eq!(
             req.url,
             "https://api.example.com/pets/a%2Fb%20c?status=x%26y%3D1"
@@ -233,8 +248,14 @@ mod tests {
     #[test]
     fn missing_required_path_param_is_error() {
         let operation = operation_with("/pets/{petId}", vec![pet_id()], vec![], None);
-        let err = build_request("https://api.example.com", &operation, &HashMap::new(), None)
-            .unwrap_err();
+        let err = build_request(
+            "https://api.example.com",
+            &operation,
+            &HashMap::new(),
+            None,
+            None,
+        )
+        .unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("petId"), "{msg}");
         assert!(msg.contains("--pet-id"), "{msg}");
@@ -249,8 +270,14 @@ mod tests {
             description: None,
         };
         let operation = operation_with("/pets", vec![], vec![required], None);
-        let err = build_request("https://api.example.com", &operation, &HashMap::new(), None)
-            .unwrap_err();
+        let err = build_request(
+            "https://api.example.com",
+            &operation,
+            &HashMap::new(),
+            None,
+            None,
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("limit"), "{err}");
     }
 
@@ -263,8 +290,14 @@ mod tests {
             description: None,
         };
         let operation = operation_with("/pets/{petId}", vec![optional], vec![], None);
-        let req =
-            build_request("https://api.example.com", &operation, &HashMap::new(), None).unwrap();
+        let req = build_request(
+            "https://api.example.com",
+            &operation,
+            &HashMap::new(),
+            None,
+            None,
+        )
+        .unwrap();
         assert_eq!(req.url, "https://api.example.com/pets/");
     }
 
@@ -276,8 +309,14 @@ mod tests {
             schema: None,
         };
         let operation = operation_with("/pets", vec![], vec![], Some(spec));
-        let err = build_request("https://api.example.com", &operation, &HashMap::new(), None)
-            .unwrap_err();
+        let err = build_request(
+            "https://api.example.com",
+            &operation,
+            &HashMap::new(),
+            None,
+            None,
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("request body"), "{err}");
     }
 
@@ -294,6 +333,7 @@ mod tests {
             &operation,
             &HashMap::new(),
             Some(b"{\"name\":\"fluffy\"}"),
+            None,
         )
         .unwrap();
         assert_eq!(req.body, Some(b"{\"name\":\"fluffy\"}".to_vec()));
@@ -317,6 +357,7 @@ mod tests {
             &operation,
             &HashMap::new(),
             Some(b"{}"),
+            None,
         )
         .unwrap();
         assert!(
@@ -334,6 +375,7 @@ mod tests {
             &operation,
             &HashMap::new(),
             Some(b"{}"),
+            None,
         )
         .unwrap_err();
         assert!(err.to_string().contains("no request body"), "{err}");
@@ -347,6 +389,7 @@ mod tests {
             &operation,
             &HashMap::new(),
             Some(b""),
+            None,
         )
         .unwrap();
         assert_eq!(req.body, None);
@@ -355,8 +398,40 @@ mod tests {
     #[test]
     fn invalid_base_url_is_parameter_error() {
         let operation = operation_with("/pets", vec![], vec![], None);
-        let err = build_request("not a url", &operation, &HashMap::new(), None).unwrap_err();
+        let err = build_request("not a url", &operation, &HashMap::new(), None, None).unwrap_err();
         assert!(matches!(err, DomainError::Parameter { .. }), "{err}");
         assert!(err.to_string().contains("base URL"), "{err}");
+    }
+
+    #[test]
+    fn bearer_token_adds_authorization_header() {
+        let operation = operation_with("/pets", vec![], vec![], None);
+        let req = build_request(
+            "https://api.example.com",
+            &operation,
+            &HashMap::new(),
+            None,
+            Some("secret-123"),
+        )
+        .unwrap();
+        assert!(
+            req.headers
+                .iter()
+                .any(|(k, v)| k == "Authorization" && v == "Bearer secret-123")
+        );
+    }
+
+    #[test]
+    fn no_token_means_no_authorization_header() {
+        let operation = operation_with("/pets", vec![], vec![], None);
+        let req = build_request(
+            "https://api.example.com",
+            &operation,
+            &HashMap::new(),
+            None,
+            None,
+        )
+        .unwrap();
+        assert!(!req.headers.iter().any(|(k, _)| k == "Authorization"));
     }
 }

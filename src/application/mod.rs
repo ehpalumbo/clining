@@ -2,5 +2,6 @@
 
 pub mod api_invocation;
 pub mod api_model;
+pub mod auth;
 pub mod ports;
 pub mod request_builder;

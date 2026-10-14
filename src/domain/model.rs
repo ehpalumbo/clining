@@ -20,7 +20,20 @@ pub struct ApiModel {
     pub version: ModelVersion,
     #[serde(default)]
     pub schema_registry: BTreeMap<String, SchemaSpec>,
+    #[serde(default)]
+    pub auth: Option<AuthConfig>,
     pub operation_groups: Vec<ApiOperationGroup>,
+}
+
+/// Bearer token source reference persisted in the model.
+///
+/// Only the *reference* (env var name or file path) is stored; the secret
+/// itself is resolved at invocation time and never written to disk.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "source", rename_all = "snake_case")]
+pub enum AuthConfig {
+    Env { var: String },
+    File { path: String },
 }
 
 impl ApiModel {
@@ -175,6 +188,7 @@ pub struct ApiInvocationRequest<'m> {
     pub operation: &'m ApiOperation,
     pub params: HashMap<String, Vec<String>>,
     pub body: Option<Vec<u8>>,
+    pub auth: Option<AuthConfig>,
 }
 
 impl<'m> ApiInvocationRequest<'m> {
@@ -183,12 +197,14 @@ impl<'m> ApiInvocationRequest<'m> {
         operation: &'m ApiOperation,
         params: HashMap<String, Vec<String>>,
         body: Option<Vec<u8>>,
+        auth: Option<AuthConfig>,
     ) -> Self {
         Self {
             base_url,
             operation,
             params,
             body,
+            auth,
         }
     }
 }
