@@ -23,3 +23,15 @@ pub trait OpenApiParser {
 pub trait HttpInvoker {
     fn send(&self, request: &HttpRequest) -> Result<HttpResponse, DomainError>;
 }
+
+/// Source of bearer token values: environment variables and files.
+///
+/// Application policy (`auth::resolve_token`) reads through this port so that
+/// token I/O stays behind an application-owned boundary (ADR-001); the only
+/// production implementation lives in `crate::infra::auth`. Failures are
+/// reported as `DomainError::Auth` naming only the var or path, never the
+/// secret — including the infra-side size guard for misconfigured paths.
+pub trait TokenSource {
+    fn read_env(&self, var: &str) -> Result<String, DomainError>;
+    fn read_file(&self, path: &str) -> Result<Vec<u8>, DomainError>;
+}

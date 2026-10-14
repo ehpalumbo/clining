@@ -4,13 +4,9 @@
 //! time) from a local source; the secret value is never persisted, logged,
 //! or included in error messages.
 
+use crate::application::ports::TokenSource;
 use crate::domain::errors::DomainError;
 use crate::domain::model::AuthConfig;
-use std::io::Read;
-
-/// Maximum token file size read (64 KiB). Bearer tokens are small; this
-/// bounds memory use on misconfigured paths.
-const MAX_TOKEN_FILE_BYTES: u64 = 64 * 1024;
 
 /// Builds an `AuthConfig` from install flag values.
 ///
@@ -56,66 +52,37 @@ pub fn auth_from_options(
 /// Tokens containing control characters are rejected to prevent header
 /// injection. Error messages reference only the var name or file path,
 /// never the secret.
-pub fn resolve_token(auth: &AuthConfig) -> Result<String, DomainError> {
+///
+/// I/O failures (unset var, unreadable file, size guard) arrive already
+/// mapped to `DomainError::Auth` by the `TokenSource` and propagate
+/// unchanged; only value validation lives here.
+pub fn resolve_token(source: &dyn TokenSource, auth: &AuthConfig) -> Result<String, DomainError> {
     match auth {
-        AuthConfig::Env { var } => resolve_env(var, &|key| std::env::var(key)),
-        AuthConfig::File { path } => resolve_file(path),
+        AuthConfig::Env { var } => resolve_env(source, var),
+        AuthConfig::File { path } => resolve_file(source, path),
     }
 }
 
-fn resolve_env(
-    var: &str,
-    lookup: &dyn Fn(&str) -> Result<String, std::env::VarError>,
-) -> Result<String, DomainError> {
-    match lookup(var) {
-        Err(std::env::VarError::NotPresent) => Err(DomainError::Auth {
-            message: format!("environment variable '{var}' is not set"),
-        }),
-        Err(std::env::VarError::NotUnicode(_)) => Err(DomainError::Auth {
-            message: format!("environment variable '{var}' value is not valid UTF-8"),
-        }),
-        Ok(value) => {
-            if value.is_empty() {
-                return Err(DomainError::Auth {
-                    message: format!("environment variable '{var}' is empty"),
-                });
-            }
-            reject_invalid_header_value(&value).map_err(|_| DomainError::Auth {
-                message: format!(
-                    "environment variable '{var}' contains an invalid newline or control character"
-                ),
-            })?;
-            Ok(value)
-        }
-    }
-}
-
-fn resolve_file(path: &str) -> Result<String, DomainError> {
-    let metadata = std::fs::metadata(path).map_err(|e| DomainError::Auth {
-        message: format!("failed to read token file '{path}': {e}"),
-    })?;
-    if metadata.len() > MAX_TOKEN_FILE_BYTES {
+fn resolve_env(source: &dyn TokenSource, var: &str) -> Result<String, DomainError> {
+    let value = source.read_env(var)?;
+    if value.is_empty() {
         return Err(DomainError::Auth {
-            message: format!("token file '{path}' exceeds size limit"),
+            message: format!("environment variable '{var}' is empty"),
         });
     }
-    let raw = {
-        let file = std::fs::File::open(path).map_err(|e| DomainError::Auth {
-            message: format!("failed to read token file '{path}': {e}"),
-        })?;
-        let mut raw = String::new();
-        file.take(MAX_TOKEN_FILE_BYTES + 1)
-            .read_to_string(&mut raw)
-            .map_err(|e| DomainError::Auth {
-                message: format!("failed to read token file '{path}': {e}"),
-            })?;
-        if raw.len() as u64 > MAX_TOKEN_FILE_BYTES {
-            return Err(DomainError::Auth {
-                message: format!("token file '{path}' exceeds size limit"),
-            });
-        }
-        raw
-    };
+    reject_invalid_header_value(&value).map_err(|_| DomainError::Auth {
+        message: format!(
+            "environment variable '{var}' contains an invalid newline or control character"
+        ),
+    })?;
+    Ok(value)
+}
+
+fn resolve_file(source: &dyn TokenSource, path: &str) -> Result<String, DomainError> {
+    let bytes = source.read_file(path)?;
+    let raw = String::from_utf8(bytes).map_err(|e| DomainError::Auth {
+        message: format!("failed to read token file '{path}': {e}"),
+    })?;
     let trimmed = raw.trim_end_matches(['\n', '\r']).to_owned();
     if trimmed.is_empty() {
         return Err(DomainError::Auth {
@@ -138,7 +105,55 @@ fn reject_invalid_header_value(token: &str) -> Result<(), ()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
+    use std::collections::HashMap;
+
+    struct FakeSource {
+        env_ok: HashMap<String, String>,
+        env_err: HashMap<String, String>,
+        file_ok: HashMap<String, Vec<u8>>,
+        file_err: HashMap<String, String>,
+    }
+
+    impl FakeSource {
+        fn empty() -> Self {
+            Self {
+                env_ok: HashMap::new(),
+                env_err: HashMap::new(),
+                file_ok: HashMap::new(),
+                file_err: HashMap::new(),
+            }
+        }
+    }
+
+    impl TokenSource for FakeSource {
+        fn read_env(&self, var: &str) -> Result<String, DomainError> {
+            if let Some(value) = self.env_ok.get(var) {
+                return Ok(value.clone());
+            }
+            if let Some(message) = self.env_err.get(var) {
+                return Err(DomainError::Auth {
+                    message: message.clone(),
+                });
+            }
+            Err(DomainError::Auth {
+                message: format!("environment variable '{var}' is not set"),
+            })
+        }
+
+        fn read_file(&self, path: &str) -> Result<Vec<u8>, DomainError> {
+            if let Some(bytes) = self.file_ok.get(path) {
+                return Ok(bytes.clone());
+            }
+            if let Some(message) = self.file_err.get(path) {
+                return Err(DomainError::Auth {
+                    message: message.clone(),
+                });
+            }
+            Err(DomainError::Auth {
+                message: format!("failed to read token file '{path}': no such file"),
+            })
+        }
+    }
 
     #[test]
     fn both_sources_is_parameter_error() {
@@ -159,169 +174,191 @@ mod tests {
 
     #[test]
     fn env_lookup_success_missing_and_empty() {
-        let token = resolve_env("ANY_VAR", &|_| Ok("secret-123".to_owned())).unwrap();
+        let source = FakeSource {
+            env_ok: HashMap::from([
+                ("ANY_VAR".to_owned(), "secret-123".to_owned()),
+                ("EMPTY_VAR".to_owned(), String::new()),
+            ]),
+            ..FakeSource::empty()
+        };
+        let token = resolve_token(
+            &source,
+            &AuthConfig::Env {
+                var: "ANY_VAR".to_owned(),
+            },
+        )
+        .unwrap();
         assert_eq!(token, "secret-123");
 
-        let err = resolve_env("MISSING_VAR", &|_| Err(std::env::VarError::NotPresent)).unwrap_err();
+        let err = resolve_token(
+            &source,
+            &AuthConfig::Env {
+                var: "MISSING_VAR".to_owned(),
+            },
+        )
+        .unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("MISSING_VAR"), "{msg}");
         assert!(msg.contains("not set"), "{msg}");
         assert!(!msg.contains("secret-123"), "{msg}");
 
-        let err = resolve_env("EMPTY_VAR", &|_| Ok(String::new())).unwrap_err();
+        let err = resolve_token(
+            &source,
+            &AuthConfig::Env {
+                var: "EMPTY_VAR".to_owned(),
+            },
+        )
+        .unwrap_err();
         assert!(matches!(err, DomainError::Auth { .. }), "{err}");
     }
 
     #[test]
-    fn env_non_utf8_is_distinct_from_not_set() {
-        let err = resolve_env("NON_UTF8_VAR", &|_| {
-            Err(std::env::VarError::NotUnicode(std::ffi::OsString::from(
-                "bad-value",
-            )))
-        })
+    fn source_errors_propagate_unchanged() {
+        let source = FakeSource {
+            env_err: HashMap::from([(
+                "BAD_VAR".to_owned(),
+                "environment variable 'BAD_VAR' value is not valid UTF-8".to_owned(),
+            )]),
+            file_err: HashMap::from([(
+                "/over-limit.txt".to_owned(),
+                "token file '/over-limit.txt' exceeds size limit".to_owned(),
+            )]),
+            ..FakeSource::empty()
+        };
+        let err = resolve_token(
+            &source,
+            &AuthConfig::Env {
+                var: "BAD_VAR".to_owned(),
+            },
+        )
         .unwrap_err();
-        assert!(matches!(err, DomainError::Auth { .. }), "{err}");
         let msg = err.to_string();
-        assert!(msg.contains("NON_UTF8_VAR"), "{msg}");
+        assert!(msg.contains("BAD_VAR"), "{msg}");
         assert!(!msg.contains("not set"), "{msg}");
-        assert!(!msg.contains("bad-value"), "{msg}");
+
+        let err = resolve_token(
+            &source,
+            &AuthConfig::File {
+                path: "/over-limit.txt".to_owned(),
+            },
+        )
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("size limit"), "{msg}");
+        assert!(msg.contains("/over-limit.txt"), "{msg}");
     }
 
     #[test]
     fn env_missing_var_via_resolve_token() {
-        // Uses a name that is never set; no env mutation required.
+        let source = FakeSource::empty();
         let var = "CLINING_TEST_DEFINITELY_UNSET_VAR_XYZ_123";
-        let err = resolve_token(&AuthConfig::Env {
-            var: var.to_owned(),
-        })
+        let err = resolve_token(
+            &source,
+            &AuthConfig::Env {
+                var: var.to_owned(),
+            },
+        )
         .unwrap_err();
         assert!(matches!(err, DomainError::Auth { .. }), "{err}");
         assert!(err.to_string().contains(var));
     }
 
-    fn write_temp(contents: &[u8]) -> std::path::PathBuf {
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static COUNTER: AtomicU64 = AtomicU64::new(0);
-        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir().join(format!(
-            "clining-token-{}-{}-{}.txt",
-            std::process::id(),
-            n,
-            contents.len()
-        ));
-        let mut f = std::fs::File::create(&path).unwrap();
-        f.write_all(contents).unwrap();
-        path
-    }
-
     #[test]
     fn file_trims_trailing_newline() {
-        let path = write_temp(b"abc123\n");
-        let token = resolve_token(&AuthConfig::File {
-            path: path.display().to_string(),
-        })
+        let source = FakeSource {
+            file_ok: HashMap::from([("/tok.txt".to_owned(), b"abc123\n".to_vec())]),
+            ..FakeSource::empty()
+        };
+        let token = resolve_token(
+            &source,
+            &AuthConfig::File {
+                path: "/tok.txt".to_owned(),
+            },
+        )
         .unwrap();
         assert_eq!(token, "abc123");
-        std::fs::remove_file(&path).unwrap();
     }
 
     #[test]
     fn file_trims_crlf_and_keeps_inner_whitespace() {
-        let path = write_temp(b"tok \r\n");
+        let source = FakeSource {
+            file_ok: HashMap::from([("/tok.txt".to_owned(), b"tok \r\n".to_vec())]),
+            ..FakeSource::empty()
+        };
         // Trailing \r\n trimmed; trailing space before it is preserved verbatim.
-        let token = resolve_token(&AuthConfig::File {
-            path: path.display().to_string(),
-        })
+        let token = resolve_token(
+            &source,
+            &AuthConfig::File {
+                path: "/tok.txt".to_owned(),
+            },
+        )
         .unwrap();
         assert_eq!(token, "tok ");
-        std::fs::remove_file(&path).unwrap();
     }
 
     #[test]
     fn file_missing_and_empty_are_errors_without_secret() {
-        let err = resolve_token(&AuthConfig::File {
-            path: "/nonexistent-clining-token-xyz".to_owned(),
-        })
+        let source = FakeSource {
+            file_ok: HashMap::from([("/empty.txt".to_owned(), b"\n".to_vec())]),
+            ..FakeSource::empty()
+        };
+        let err = resolve_token(
+            &source,
+            &AuthConfig::File {
+                path: "/nonexistent-clining-token-xyz".to_owned(),
+            },
+        )
         .unwrap_err();
         assert!(matches!(err, DomainError::Auth { .. }));
 
-        let path = write_temp(b"\n");
-        let err = resolve_token(&AuthConfig::File {
-            path: path.display().to_string(),
-        })
+        let err = resolve_token(
+            &source,
+            &AuthConfig::File {
+                path: "/empty.txt".to_owned(),
+            },
+        )
         .unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("empty"), "{msg}");
-        std::fs::remove_file(&path).unwrap();
     }
 
     #[test]
-    fn file_oversize_is_rejected_with_size_limit() {
-        let big = vec![b'a'; MAX_TOKEN_FILE_BYTES as usize + 1];
-        let path = write_temp(&big);
-        let err = resolve_token(&AuthConfig::File {
-            path: path.display().to_string(),
-        })
-        .unwrap_err();
+    fn file_non_utf8_is_auth_error_without_secret() {
+        let path = "/non-utf8.txt".to_owned();
+        let source = FakeSource {
+            file_ok: HashMap::from([(path.clone(), vec![0xff, 0xfe, b'a'])]),
+            ..FakeSource::empty()
+        };
+        let err = resolve_token(&source, &AuthConfig::File { path: path.clone() }).unwrap_err();
         assert!(matches!(err, DomainError::Auth { .. }), "{err}");
         let msg = err.to_string();
-        assert!(msg.contains("size limit"), "{msg}");
-        assert!(msg.contains(&path.display().to_string()), "{msg}");
-        std::fs::remove_file(&path).unwrap();
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn dev_zero_is_rejected_with_size_limit_without_hanging() {
-        let err = resolve_token(&AuthConfig::File {
-            path: "/dev/zero".to_owned(),
-        })
-        .unwrap_err();
-        assert!(matches!(err, DomainError::Auth { .. }), "{err}");
-        assert!(err.to_string().contains("size limit"), "{err}");
+        assert!(msg.contains(&path), "{msg}");
     }
 
     #[test]
     fn control_characters_are_rejected_for_env_and_file() {
         for token in ["ab\x00cd", "ab\x01cd", "ab\x7Fcd", "ab\ncd", "ab\rcd"] {
-            let err = resolve_env("CTL_VAR", &|_| Ok(token.to_owned())).unwrap_err();
+            let path = format!("/ctl-{}.txt", token.len());
+            let source = FakeSource {
+                env_ok: HashMap::from([("CTL_VAR".to_owned(), token.to_owned())]),
+                file_ok: HashMap::from([(path.clone(), token.as_bytes().to_vec())]),
+                ..FakeSource::empty()
+            };
+            let err = resolve_token(
+                &source,
+                &AuthConfig::Env {
+                    var: "CTL_VAR".to_owned(),
+                },
+            )
+            .unwrap_err();
             assert!(matches!(err, DomainError::Auth { .. }), "{token:?}: {err}");
             let msg = err.to_string();
             assert!(msg.contains("CTL_VAR"), "{token:?}: {msg}");
             assert!(!msg.contains(token), "{token:?}: {msg}");
 
-            let path = write_temp(token.as_bytes());
-            let err = resolve_token(&AuthConfig::File {
-                path: path.display().to_string(),
-            })
-            .unwrap_err();
+            let err = resolve_token(&source, &AuthConfig::File { path: path.clone() }).unwrap_err();
             assert!(matches!(err, DomainError::Auth { .. }), "{token:?}: {err}");
             assert!(!matches!(err, DomainError::Network { .. }), "{token:?}");
-            std::fs::remove_file(&path).unwrap();
-        }
-    }
-
-    #[allow(unsafe_code)]
-    #[test]
-    fn env_control_characters_via_resolve_token_are_auth_errors() {
-        // NUL cannot appear in a real process environment (execve rejects it),
-        // so exercise it through the mocked lookup above; here cover CTLs that
-        // are settable via the environment.
-        for suspicious in ["bad\x01token", "bad\x7Ftoken", "bad\ntoken"] {
-            let var = "CLINING_TEST_CTL_ENV_XYZ_123";
-            unsafe {
-                std::env::set_var(var, suspicious);
-            }
-            let err = resolve_token(&AuthConfig::Env {
-                var: var.to_owned(),
-            })
-            .unwrap_err();
-            assert!(matches!(err, DomainError::Auth { .. }), "{err}");
-            assert!(!matches!(err, DomainError::Network { .. }), "{err}");
-            assert!(err.to_string().contains(var));
-            unsafe {
-                std::env::remove_var(var);
-            }
         }
     }
 }
