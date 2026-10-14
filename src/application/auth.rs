@@ -53,29 +53,37 @@ pub fn auth_from_options(
 ///
 /// Env values are used verbatim (empty is an error). File contents are
 /// trimmed of trailing `\n`/`\r` only; empty-after-trim is an error.
-/// Tokens containing embedded newlines are rejected to prevent header
+/// Tokens containing control characters are rejected to prevent header
 /// injection. Error messages reference only the var name or file path,
 /// never the secret.
 pub fn resolve_token(auth: &AuthConfig) -> Result<String, DomainError> {
     match auth {
-        AuthConfig::Env { var } => resolve_env(var, &|key| std::env::var(key).ok()),
+        AuthConfig::Env { var } => resolve_env(var, &|key| std::env::var(key)),
         AuthConfig::File { path } => resolve_file(path),
     }
 }
 
-fn resolve_env(var: &str, lookup: &dyn Fn(&str) -> Option<String>) -> Result<String, DomainError> {
+fn resolve_env(
+    var: &str,
+    lookup: &dyn Fn(&str) -> Result<String, std::env::VarError>,
+) -> Result<String, DomainError> {
     match lookup(var) {
-        None => Err(DomainError::Auth {
+        Err(std::env::VarError::NotPresent) => Err(DomainError::Auth {
             message: format!("environment variable '{var}' is not set"),
         }),
-        Some(value) => {
+        Err(std::env::VarError::NotUnicode(_)) => Err(DomainError::Auth {
+            message: format!("environment variable '{var}' value is not valid UTF-8"),
+        }),
+        Ok(value) => {
             if value.is_empty() {
                 return Err(DomainError::Auth {
                     message: format!("environment variable '{var}' is empty"),
                 });
             }
-            reject_embedded_newlines(&value).map_err(|_| DomainError::Auth {
-                message: format!("environment variable '{var}' contains an invalid newline"),
+            reject_invalid_header_value(&value).map_err(|_| DomainError::Auth {
+                message: format!(
+                    "environment variable '{var}' contains an invalid newline or control character"
+                ),
             })?;
             Ok(value)
         }
@@ -114,14 +122,14 @@ fn resolve_file(path: &str) -> Result<String, DomainError> {
             message: format!("token file '{path}' is empty"),
         });
     }
-    reject_embedded_newlines(&trimmed).map_err(|_| DomainError::Auth {
-        message: format!("token file '{path}' contains an invalid newline"),
+    reject_invalid_header_value(&trimmed).map_err(|_| DomainError::Auth {
+        message: format!("token file '{path}' contains an invalid newline or control character"),
     })?;
     Ok(trimmed)
 }
 
-fn reject_embedded_newlines(token: &str) -> Result<(), ()> {
-    if token.contains('\n') || token.contains('\r') {
+fn reject_invalid_header_value(token: &str) -> Result<(), ()> {
+    if token.bytes().any(|b| b < 0x20 || b == 0x7F) {
         return Err(());
     }
     Ok(())
@@ -151,16 +159,32 @@ mod tests {
 
     #[test]
     fn env_lookup_success_missing_and_empty() {
-        let token = resolve_env("ANY_VAR", &|_| Some("secret-123".to_owned())).unwrap();
+        let token = resolve_env("ANY_VAR", &|_| Ok("secret-123".to_owned())).unwrap();
         assert_eq!(token, "secret-123");
 
-        let err = resolve_env("MISSING_VAR", &|_| None).unwrap_err();
+        let err = resolve_env("MISSING_VAR", &|_| Err(std::env::VarError::NotPresent)).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("MISSING_VAR"), "{msg}");
+        assert!(msg.contains("not set"), "{msg}");
         assert!(!msg.contains("secret-123"), "{msg}");
 
-        let err = resolve_env("EMPTY_VAR", &|_| Some(String::new())).unwrap_err();
+        let err = resolve_env("EMPTY_VAR", &|_| Ok(String::new())).unwrap_err();
         assert!(matches!(err, DomainError::Auth { .. }), "{err}");
+    }
+
+    #[test]
+    fn env_non_utf8_is_distinct_from_not_set() {
+        let err = resolve_env("NON_UTF8_VAR", &|_| {
+            Err(std::env::VarError::NotUnicode(std::ffi::OsString::from(
+                "bad-value",
+            )))
+        })
+        .unwrap_err();
+        assert!(matches!(err, DomainError::Auth { .. }), "{err}");
+        let msg = err.to_string();
+        assert!(msg.contains("NON_UTF8_VAR"), "{msg}");
+        assert!(!msg.contains("not set"), "{msg}");
+        assert!(!msg.contains("bad-value"), "{msg}");
     }
 
     #[test]
@@ -255,5 +279,49 @@ mod tests {
         .unwrap_err();
         assert!(matches!(err, DomainError::Auth { .. }), "{err}");
         assert!(err.to_string().contains("size limit"), "{err}");
+    }
+
+    #[test]
+    fn control_characters_are_rejected_for_env_and_file() {
+        for token in ["ab\x00cd", "ab\x01cd", "ab\x7Fcd", "ab\ncd", "ab\rcd"] {
+            let err = resolve_env("CTL_VAR", &|_| Ok(token.to_owned())).unwrap_err();
+            assert!(matches!(err, DomainError::Auth { .. }), "{token:?}: {err}");
+            let msg = err.to_string();
+            assert!(msg.contains("CTL_VAR"), "{token:?}: {msg}");
+            assert!(!msg.contains(token), "{token:?}: {msg}");
+
+            let path = write_temp(token.as_bytes());
+            let err = resolve_token(&AuthConfig::File {
+                path: path.display().to_string(),
+            })
+            .unwrap_err();
+            assert!(matches!(err, DomainError::Auth { .. }), "{token:?}: {err}");
+            assert!(!matches!(err, DomainError::Network { .. }), "{token:?}");
+            std::fs::remove_file(&path).unwrap();
+        }
+    }
+
+    #[allow(unsafe_code)]
+    #[test]
+    fn env_control_characters_via_resolve_token_are_auth_errors() {
+        // NUL cannot appear in a real process environment (execve rejects it),
+        // so exercise it through the mocked lookup above; here cover CTLs that
+        // are settable via the environment.
+        for suspicious in ["bad\x01token", "bad\x7Ftoken", "bad\ntoken"] {
+            let var = "CLINING_TEST_CTL_ENV_XYZ_123";
+            unsafe {
+                std::env::set_var(var, suspicious);
+            }
+            let err = resolve_token(&AuthConfig::Env {
+                var: var.to_owned(),
+            })
+            .unwrap_err();
+            assert!(matches!(err, DomainError::Auth { .. }), "{err}");
+            assert!(!matches!(err, DomainError::Network { .. }), "{err}");
+            assert!(err.to_string().contains(var));
+            unsafe {
+                std::env::remove_var(var);
+            }
+        }
     }
 }
