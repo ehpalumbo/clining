@@ -8,9 +8,9 @@ tags:
   - "schema-registry"
 timestamp: "2026-08-20T22:36:32Z"
 related:
-  - "[Phased Implementation Plan](implementation-plan.md)"
-  - "[Requirements Specification](../specs/spec.md)"
-  - "[Architecture Overview](../architecture/overview.md)"
+  - "[Phased Implementation Plan](../implementation-plan.md)"
+  - "[Requirements Specification](../../specs/spec.md)"
+  - "[Architecture Overview](../../architecture/overview.md)"
 ---
 
 # Issue #1 — OpenAPI `$ref` resolution + request/response body schemas
@@ -39,18 +39,7 @@ Agreed design decisions:
 - **Affected Symbols:** `SchemaSpec`, `CompositeKind`, `ResponseSpec`, `BodySpec`, `ApiOperation`, `ApiModel`, `ApiModel::schema_by_ref_id`
 - **Description:**
   - `CompositeKind`: `AllOf`, `OneOf`, `AnyOf`.
-  - `SchemaSpec` (serde `tag = "kind"`, `rename_all = "snake_case"`):
-
-    ```rust
-    pub enum SchemaSpec {
-        Ref { ref_id: String },
-        Object { properties: BTreeMap<String, SchemaSpec>, extra_json: Option<String> },
-        Array { items: Option<Box<SchemaSpec>>, extra_json: Option<String> },
-        Primitive { raw_json: String },
-        Composite { composite_kind: CompositeKind, schemas: Vec<SchemaSpec>, extra_json: Option<String> },
-        Unknown { raw_json: String },
-    }
-    ```
+  - `SchemaSpec`: a recursive schema-tree node serialized with a snake_case `kind` discriminator. Six variants cover the shapes OpenAPI schemas take — a `Ref` pointing into the registry by ID; an `Object` carrying its properties as nested nodes; an `Array` carrying an optional item node; a `Composite` (`allOf`/`oneOf`/`anyOf`) carrying its branch nodes; and `Primitive` / `Unknown` leaves that preserve their complete raw JSON payload. Compound variants store their children structurally and keep only unmodeled metadata alongside them, so payloads are never duplicated between parent and child.
 
   - `BodySpec`: replace `schema_json: Option<String>` with `schema: Option<SchemaSpec>` — inline schemas use the same typed type as registry values.
   - `ResponseSpec { status_code: String, content_type: String, schema: Option<SchemaSpec> }`.

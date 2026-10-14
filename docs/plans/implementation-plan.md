@@ -27,10 +27,10 @@ One commit per phase, plus an initial documentation commit containing this plan.
 
 | Phase | Scope | Status | Plan |
 | --- | --- | --- | --- |
-| 1 | Toolchain & onion scaffolding — lint-clean crate skeleton | **Completed** | [phase-1-scaffolding.md](phases/phase-1-scaffolding.md) |
-| 2 | "Learn" slice — model, OpenAPI parser, store, source loader, `install` | **Completed** | [phase-2-learn.md](phases/phase-2-learn.md) |
-| 3 | "Invoke" slice — request builder, HTTP adapter, dynamic CLI, streaming | **Completed** | [phase-3-invoke.md](phases/phase-3-invoke.md) |
-| 4 | Discovery polish & hardening — help, error UX, E2E tests, README/Makefile | **Completed** | [phase-4-polish.md](phases/phase-4-polish.md) |
+| 1 | Toolchain & onion scaffolding — lint-clean crate skeleton | **Completed** | [phase-1-scaffolding.md](archive/phase-1-scaffolding.md) |
+| 2 | "Learn" slice — model, OpenAPI parser, store, source loader, `install` | **Completed** | [phase-2-learn.md](archive/phase-2-learn.md) |
+| 3 | "Invoke" slice — request builder, HTTP adapter, dynamic CLI, streaming | **Completed** | [phase-3-invoke.md](archive/phase-3-invoke.md) |
+| 4 | Discovery polish & hardening — help, error UX, E2E tests, README/Makefile | **Completed** | [phase-4-polish.md](archive/phase-4-polish.md) |
 
 Status values: **Planned** → **In Progress** → **Completed**.
 
