@@ -6,6 +6,7 @@
 
 use crate::domain::errors::DomainError;
 use crate::domain::model::AuthConfig;
+use std::io::Read;
 
 /// Maximum token file size read (64 KiB). Bearer tokens are small; this
 /// bounds memory use on misconfigured paths.
@@ -90,9 +91,23 @@ fn resolve_file(path: &str) -> Result<String, DomainError> {
             message: format!("token file '{path}' exceeds size limit"),
         });
     }
-    let raw = std::fs::read_to_string(path).map_err(|e| DomainError::Auth {
-        message: format!("failed to read token file '{path}': {e}"),
-    })?;
+    let raw = {
+        let file = std::fs::File::open(path).map_err(|e| DomainError::Auth {
+            message: format!("failed to read token file '{path}': {e}"),
+        })?;
+        let mut raw = String::new();
+        file.take(MAX_TOKEN_FILE_BYTES + 1)
+            .read_to_string(&mut raw)
+            .map_err(|e| DomainError::Auth {
+                message: format!("failed to read token file '{path}': {e}"),
+            })?;
+        if raw.len() as u64 > MAX_TOKEN_FILE_BYTES {
+            return Err(DomainError::Auth {
+                message: format!("token file '{path}' exceeds size limit"),
+            });
+        }
+        raw
+    };
     let trimmed = raw.trim_end_matches(['\n', '\r']).to_owned();
     if trimmed.is_empty() {
         return Err(DomainError::Auth {
@@ -161,9 +176,13 @@ mod tests {
     }
 
     fn write_temp(contents: &[u8]) -> std::path::PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
         let path = std::env::temp_dir().join(format!(
-            "clining-token-{}-{}.txt",
+            "clining-token-{}-{}-{}.txt",
             std::process::id(),
+            n,
             contents.len()
         ));
         let mut f = std::fs::File::create(&path).unwrap();
@@ -210,5 +229,31 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("empty"), "{msg}");
         std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn file_oversize_is_rejected_with_size_limit() {
+        let big = vec![b'a'; MAX_TOKEN_FILE_BYTES as usize + 1];
+        let path = write_temp(&big);
+        let err = resolve_token(&AuthConfig::File {
+            path: path.display().to_string(),
+        })
+        .unwrap_err();
+        assert!(matches!(err, DomainError::Auth { .. }), "{err}");
+        let msg = err.to_string();
+        assert!(msg.contains("size limit"), "{msg}");
+        assert!(msg.contains(&path.display().to_string()), "{msg}");
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn dev_zero_is_rejected_with_size_limit_without_hanging() {
+        let err = resolve_token(&AuthConfig::File {
+            path: "/dev/zero".to_owned(),
+        })
+        .unwrap_err();
+        assert!(matches!(err, DomainError::Auth { .. }), "{err}");
+        assert!(err.to_string().contains("size limit"), "{err}");
     }
 }
