@@ -46,7 +46,9 @@ pub(crate) fn command_after_help(model: &ApiModel, operation: &ApiOperation) -> 
 }
 
 /// Help text for a single clap argument: description, requiredness, and the
-/// spec-provided value shape (type, enum, examples, constraints).
+/// spec-provided value shape (type, enum, examples, constraints). Structured
+/// schemas append an indented field walkthrough so object and array parameters
+/// are documented, not just labeled with their top-level type.
 pub(crate) fn param_help_text(model: &ApiModel, param: &Param) -> String {
     let mut text = param.description.clone().unwrap_or_default();
     if !text.is_empty() {
@@ -62,8 +64,38 @@ pub(crate) fn param_help_text(model: &ApiModel, param: &Param) -> String {
         if !details.is_empty() {
             let _ = write!(text, " ({details})");
         }
+        if let Some(walkthrough) = param_walkthrough(model, schema) {
+            text.push('\n');
+            text.push_str(&walkthrough);
+        }
     }
     text
+}
+
+/// Renders the children of a structured parameter schema at one indent level.
+/// Primitive parameters yield `None`, so their help stays a single line.
+fn param_walkthrough(model: &ApiModel, schema: &SchemaSpec) -> Option<String> {
+    let mut seen = Vec::new();
+    let mut nested = String::new();
+    match schema {
+        SchemaSpec::Ref { ref_id } => match resolve_ref(model, ref_id, &seen) {
+            RefResolution::Target {
+                chain,
+                schema: target,
+            } => {
+                seen.extend(chain);
+                render_schema_children(model, target, 1, &mut seen, &mut nested);
+            }
+            RefResolution::Recursive | RefResolution::Unresolved => {}
+        },
+        _ => render_schema_children(model, schema, 1, &mut seen, &mut nested),
+    }
+    let nested = nested.trim_end_matches('\n');
+    if nested.is_empty() {
+        None
+    } else {
+        Some(nested.to_owned())
+    }
 }
 
 fn parameter_details(model: &ApiModel, schema: &SchemaSpec) -> String {
@@ -1098,6 +1130,55 @@ mod tests {
         assert_eq!(
             param_help_text(&model, &optional),
             r#"(optional) (type: Status (string); enum: "open", "closed")"#
+        );
+    }
+
+    #[test]
+    fn param_help_walks_object_and_array_item_shapes() {
+        let registry = BTreeMap::from([(
+            "Filter".to_owned(),
+            object(
+                BTreeMap::from([
+                    (
+                        "kind".to_owned(),
+                        primitive(r#"{"type":"string","enum":["a","b"]}"#),
+                    ),
+                    (
+                        "limit".to_owned(),
+                        primitive(r#"{"type":"integer","minimum":1}"#),
+                    ),
+                ]),
+                Some(r#"{"required":["kind"]}"#.to_owned()),
+            ),
+        )]);
+        let model = model_with_registry(registry);
+        let object_param = Param {
+            name: "filter".to_owned(),
+            canonical_name: "filter".to_owned(),
+            required: false,
+            description: None,
+            schema: Some(SchemaSpec::Ref {
+                ref_id: "Filter".to_owned(),
+            }),
+        };
+        assert_eq!(
+            param_help_text(&model, &object_param),
+            "(optional) (type: Filter (object))\n  kind: string (required) (enum: \"a\", \"b\")\n  limit: integer (minimum: 1)"
+        );
+
+        let array_param = Param {
+            name: "tags".to_owned(),
+            canonical_name: "tags".to_owned(),
+            required: false,
+            description: None,
+            schema: Some(SchemaSpec::Array {
+                items: Some(Box::new(primitive(r#"{"type":"string","enum":["x","y"]}"#))),
+                extra_json: None,
+            }),
+        };
+        assert_eq!(
+            param_help_text(&model, &array_param),
+            "(optional) (type: array<string>)\n  string (enum: \"x\", \"y\")"
         );
     }
 

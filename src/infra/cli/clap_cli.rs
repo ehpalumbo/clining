@@ -883,6 +883,42 @@ mod tests {
     }
 
     #[test]
+    fn command_help_indents_structured_param_walkthrough() {
+        let mut model = sample_model();
+        model.schema_registry.insert(
+            "Filter".to_owned(),
+            SchemaSpec::Object {
+                properties: BTreeMap::from([(
+                    "kind".to_owned(),
+                    SchemaSpec::Primitive {
+                        raw_json: r#"{"enum":["a","b"],"type":"string"}"#.to_owned(),
+                    },
+                )]),
+                extra_json: Some(r#"{"required":["kind"]}"#.to_owned()),
+            },
+        );
+        model.operation_groups[0].operations[0].query_params[0].schema = Some(SchemaSpec::Ref {
+            ref_id: "Filter".to_owned(),
+        });
+
+        let cmd = build_cli_command(Some(&model));
+        let mut command = cmd
+            .find_subcommand("pets")
+            .unwrap()
+            .find_subcommand("pets")
+            .unwrap()
+            .find_subcommand("get-pet")
+            .unwrap()
+            .clone();
+        let help = command.render_help().to_string();
+        assert!(help.contains("type: Filter (object)"), "{help}");
+        assert!(
+            help.contains(r#"kind: string (required) (enum: "a", "b")"#),
+            "{help}"
+        );
+    }
+
+    #[test]
     fn command_footer_includes_request_and_body() {
         let cmd = build_cli_command(Some(&sample_model()));
         let command = cmd
