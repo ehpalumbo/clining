@@ -25,7 +25,7 @@ pub(crate) fn command_after_help(model: &ApiModel, operation: &ApiOperation) -> 
         operation.path
     );
 
-    let _ = writeln!(text, "\nRequest body");
+    let _ = writeln!(text, "\nRequest body:");
     match &operation.request_body {
         Some(body) => render_request_body(model, body, &mut text),
         None => {
@@ -33,7 +33,7 @@ pub(crate) fn command_after_help(model: &ApiModel, operation: &ApiOperation) -> 
         }
     }
 
-    let _ = writeln!(text, "\nResponses");
+    let _ = writeln!(text, "\nResponses:");
     if operation.responses.is_empty() {
         let _ = writeln!(text, "  none documented");
     } else {
@@ -791,7 +791,7 @@ mod tests {
 
         assert!(help.contains("Request: POST /store/orders"), "{help}");
         assert!(
-            help.contains("Request body\n  application/json (required)"),
+            help.contains("Request body:\n  application/json (required)"),
             "{help}"
         );
         assert!(help.contains("Order (object) {"), "{help}");

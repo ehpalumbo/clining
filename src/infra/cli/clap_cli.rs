@@ -936,7 +936,7 @@ mod tests {
         let footer = footer.unwrap();
         assert!(footer.contains("Request: GET /pets/{petId}"), "{footer}");
         assert!(
-            footer.contains("Request body\n  application/json (required)\n    object"),
+            footer.contains("Request body:\n  application/json (required)\n    object"),
             "{footer}"
         );
     }
@@ -959,7 +959,7 @@ mod tests {
             footer.contains("id: integer (required): Order id (minimum: 1)"),
             "{footer}"
         );
-        assert!(footer.contains("Responses"), "{footer}");
+        assert!(footer.contains("Responses:"), "{footer}");
         assert!(footer.contains("200 application/json"), "{footer}");
         assert!(!footer.contains("$ref"), "{footer}");
     }
