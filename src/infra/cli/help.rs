@@ -11,6 +11,7 @@ use std::fmt::Write;
 use crate::domain::model::{
     ApiModel, ApiOperation, BodySpec, CompositeKind, Param, ResponseSpec, SchemaSpec,
 };
+use crate::infra::openapi::parser::parse_schema_value;
 
 /// Renders the long-form input/output documentation shown under a command's
 /// `--help`: the request line, request body walkthrough, and response schemas.
@@ -284,7 +285,7 @@ fn render_schema_children(
         SchemaSpec::Composite {
             composite_kind,
             schemas,
-            ..
+            extra_json,
         } => {
             let branch_label = match composite_kind {
                 CompositeKind::AllOf => "part",
@@ -301,6 +302,7 @@ fn render_schema_children(
                     text,
                 );
             }
+            render_composite_siblings(model, extra_json.as_deref(), depth, seen, text);
         }
         // Defensive: callers normally resolve refs before rendering children,
         // but following refs here keeps alias components rendering correctly.
@@ -308,6 +310,46 @@ fn render_schema_children(
             render_schema_entry(model, schema, "", depth, false, seen, text);
         }
         _ => {}
+    }
+}
+
+/// Renders `properties`/`required` declared alongside a composite keyword
+/// (`allOf`/`oneOf`/`anyOf`).
+///
+/// The parser preserves those siblings as unmodeled metadata in `extra_json`,
+/// so without this they never appear in help even though they constrain the
+/// instance.
+fn render_composite_siblings(
+    model: &ApiModel,
+    extra_json: Option<&str>,
+    depth: usize,
+    seen: &mut Vec<String>,
+    text: &mut String,
+) {
+    let Some(raw) = extra_json else {
+        return;
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) else {
+        return;
+    };
+    let Some(properties) = value
+        .get("properties")
+        .and_then(serde_json::Value::as_object)
+    else {
+        return;
+    };
+    let required = required_names(Some(raw));
+    for (name, property) in properties {
+        let schema = parse_schema_value(property);
+        render_schema_entry(
+            model,
+            &schema,
+            name,
+            depth,
+            required.iter().any(|r| r == name),
+            seen,
+            text,
+        );
     }
 }
 
@@ -889,6 +931,48 @@ mod tests {
         assert!(help.contains("body: oneOf {"), "{help}");
         assert!(help.contains("option 1: string"), "{help}");
         assert!(help.contains("option 2: Order (object) {"), "{help}");
+    }
+
+    #[test]
+    fn renders_properties_declared_alongside_composites() {
+        let registry = BTreeMap::from([
+            (
+                "Base".to_owned(),
+                object(
+                    BTreeMap::from([("id".to_owned(), primitive(r#"{"type":"integer"}"#))]),
+                    Some(r#"{"required":["id"]}"#.to_owned()),
+                ),
+            ),
+            (
+                "Extended".to_owned(),
+                SchemaSpec::Composite {
+                    composite_kind: CompositeKind::AllOf,
+                    schemas: vec![SchemaSpec::Ref {
+                        ref_id: "Base".to_owned(),
+                    }],
+                    extra_json: Some(
+                        r#"{"required":["name"],"properties":{"name":{"type":"string","description":"Display name"}}}"#
+                            .to_owned(),
+                    ),
+                },
+            ),
+        ]);
+        let model = model_with_registry(registry);
+        let body = BodySpec {
+            required: true,
+            content_type: "application/json".to_owned(),
+            schema: Some(SchemaSpec::Ref {
+                ref_id: "Extended".to_owned(),
+            }),
+        };
+        let help = command_after_help(&model, &operation(vec![], vec![], Some(body), vec![]));
+
+        assert!(help.contains("body: Extended (allOf) {"), "{help}");
+        assert!(help.contains("part 1: Base (object) {"), "{help}");
+        assert!(
+            help.contains("name: string (required): Display name"),
+            "{help}"
+        );
     }
 
     #[test]

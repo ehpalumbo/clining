@@ -396,6 +396,14 @@ impl Parser {
     }
 }
 
+/// Parses a raw JSON schema value into the typed `SchemaSpec`.
+///
+/// Used by the help renderer to decode sibling `properties` that the parser
+/// preserves in a composite node's `extra_json`.
+pub(crate) fn parse_schema_value(value: &serde_json::Value) -> SchemaSpec {
+    Parser::parse_schema(value)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
