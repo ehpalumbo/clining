@@ -114,7 +114,6 @@ All errors go to stderr as a one-line `error: <message>`; all failure paths exit
 - Auth beyond Bearer tokens via env var or token file (no API keys, OAuth flows, etc.).
 - OpenAPI 3.1 and 2.0 (Swagger) support.
 - Async/concurrent execution.
-- A separate long-form `--docs` view; command-level `--help` carries the full documentation.
 - Convenience features such as `clining list`, command aliases, and shell tab-completion.
 
 ## Traceability to Phases
