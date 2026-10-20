@@ -201,11 +201,11 @@ fn render_schema_entry(
         SchemaSpec::Ref { ref_id } => match resolve_ref(model, ref_id, seen) {
             RefResolution::Recursive => {
                 let item = format!("{ref_id} (recursive)");
-                let _ = writeln!(text, "{indent}{}", schema_head(label, &item));
+                let _ = writeln!(text, "{indent}{}", schema_head_line(label, &item, required));
             }
             RefResolution::Unresolved => {
                 let item = format!("{ref_id} (unresolved reference)");
-                let _ = writeln!(text, "{indent}{}", schema_head(label, &item));
+                let _ = writeln!(text, "{indent}{}", schema_head_line(label, &item, required));
             }
             RefResolution::Target {
                 chain,
@@ -408,16 +408,22 @@ fn has_structure(schema: &SchemaSpec) -> bool {
 /// and compact metadata. Array items have no label because the enclosing
 /// brackets already identify them.
 fn schema_line(label: &str, type_label: &str, required: bool, meta: SchemaMeta) -> String {
-    let mut line = schema_head(label, type_label);
-    if required {
-        line.push_str(" (required)");
-    }
+    let mut line = schema_head_line(label, type_label, required);
     if let Some(description) = &meta.description {
         let _ = write!(line, ": {description}");
     }
     let details = meta.details();
     if !details.is_empty() {
         let _ = write!(line, " ({})", details.join("; "));
+    }
+    line
+}
+
+/// Builds `label: type` with an optional required marker, without metadata.
+fn schema_head_line(label: &str, type_label: &str, required: bool) -> String {
+    let mut line = schema_head(label, type_label);
+    if required {
+        line.push_str(" (required)");
     }
     line
 }
@@ -864,7 +870,7 @@ mod tests {
                         ref_id: "Node".to_owned(),
                     },
                 )]),
-                None,
+                Some(r#"{"required":["next"]}"#.to_owned()),
             ),
         )]);
         let model = model_with_registry(registry);
@@ -878,7 +884,7 @@ mod tests {
         let help = command_after_help(&model, &operation(vec![], vec![], Some(body), vec![]));
 
         assert!(help.contains("body: Node (object) {"), "{help}");
-        assert!(help.contains("next: Node (recursive)"), "{help}");
+        assert!(help.contains("next: Node (recursive) (required)"), "{help}");
         assert!(!help.contains("$ref"), "{help}");
     }
 
@@ -1090,6 +1096,28 @@ mod tests {
         };
         let help = command_after_help(&model, &operation(vec![], vec![], Some(no_schema), vec![]));
         assert!(help.contains("schema not documented"), "{help}");
+
+        let body_with_missing = BodySpec {
+            required: false,
+            content_type: "application/json".to_owned(),
+            schema: Some(object(
+                BTreeMap::from([(
+                    "missing".to_owned(),
+                    SchemaSpec::Ref {
+                        ref_id: "Missing".to_owned(),
+                    },
+                )]),
+                Some(r#"{"required":["missing"]}"#.to_owned()),
+            )),
+        };
+        let help = command_after_help(
+            &model,
+            &operation(vec![], vec![], Some(body_with_missing), vec![]),
+        );
+        assert!(
+            help.contains("missing: Missing (unresolved reference) (required)"),
+            "{help}"
+        );
     }
 
     #[test]
