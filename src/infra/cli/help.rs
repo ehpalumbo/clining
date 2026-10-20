@@ -87,7 +87,7 @@ fn render_request_body(model: &ApiModel, body: &BodySpec, text: &mut String) {
         }
     );
     match &body.schema {
-        Some(schema) => render_schema_entry(model, schema, "Body", 2, false, &mut Vec::new(), text),
+        Some(schema) => render_schema_entry(model, schema, "body", 2, false, &mut Vec::new(), text),
         None => {
             let _ = writeln!(text, "    schema not documented");
         }
@@ -95,14 +95,17 @@ fn render_request_body(model: &ApiModel, body: &BodySpec, text: &mut String) {
 }
 
 fn render_response(model: &ApiModel, response: &ResponseSpec, text: &mut String) {
-    if response.content_type.is_empty() {
-        let _ = writeln!(text, "  {}", response.status_code);
-    } else {
-        let _ = writeln!(text, "  {} {}", response.status_code, response.content_type);
+    match &response.content_type {
+        Some(content_type) => {
+            let _ = writeln!(text, "  {} {content_type}", response.status_code);
+        }
+        None => {
+            let _ = writeln!(text, "  {}", response.status_code);
+        }
     }
     match &response.schema {
-        Some(schema) => render_schema_entry(model, schema, "Body", 2, false, &mut Vec::new(), text),
-        None if response.content_type.is_empty() => {}
+        Some(schema) => render_schema_entry(model, schema, "body", 2, false, &mut Vec::new(), text),
+        None if response.content_type.is_none() => {}
         None => {
             let _ = writeln!(text, "    schema not documented");
         }
@@ -111,6 +114,8 @@ fn render_response(model: &ApiModel, response: &ResponseSpec, text: &mut String)
 
 /// Renders one schema node (a property, body, response, array item, or
 /// composite branch) with its label, resolved shape, metadata, and children.
+/// Nested structure uses JSON-like braces, so the outline stays unambiguous
+/// even when descriptions contain punctuation.
 fn render_schema_entry(
     model: &ApiModel,
     schema: &SchemaSpec,
@@ -124,30 +129,70 @@ fn render_schema_entry(
     match schema {
         SchemaSpec::Ref { ref_id } => {
             if seen.iter().any(|id| id == ref_id) {
-                let _ = writeln!(text, "{indent}{label} ({ref_id}, recursive)");
+                let _ = writeln!(text, "{indent}{label}: {ref_id} (recursive)");
                 return;
             }
             let Some(target) = model.schema_by_ref_id(ref_id) else {
-                let _ = writeln!(text, "{indent}{label} ({ref_id}, unresolved reference)");
+                let _ = writeln!(text, "{indent}{label}: {ref_id} (unresolved reference)");
                 return;
             };
-            let head = if label == ref_id {
-                format!("{ref_id} ({}", type_display(target))
+            let type_label = if label == ref_id {
+                type_display(target)
             } else {
-                format!("{label} ({ref_id}, {}", type_display(target))
+                format!("{ref_id} ({})", type_display(target))
             };
-            let line = decorate(head, required, meta_from_schema(target));
+            let mut line = schema_line(label, &type_label, required, meta_from_schema(target));
+            let mut nested_seen = seen.clone();
+            nested_seen.push(ref_id.clone());
+            let opens = schema_has_children(model, target, &nested_seen);
+            if opens {
+                line.push_str(" {");
+            }
             let _ = writeln!(text, "{indent}{line}");
-            seen.push(ref_id.clone());
-            render_schema_children(model, target, depth + 1, seen, text);
-            seen.pop();
+            if opens {
+                seen.push(ref_id.clone());
+                render_schema_children(model, target, depth + 1, seen, text);
+                seen.pop();
+                let _ = writeln!(text, "{indent}}}");
+            }
         }
         _ => {
-            let meta = meta_from_schema(schema);
-            let line = decorate(format!("{label} ({}", type_display(schema)), required, meta);
+            let mut line = schema_line(
+                label,
+                &type_display(schema),
+                required,
+                meta_from_schema(schema),
+            );
+            let opens = schema_has_children(model, schema, seen);
+            if opens {
+                line.push_str(" {");
+            }
             let _ = writeln!(text, "{indent}{line}");
-            render_schema_children(model, schema, depth + 1, seen, text);
+            if opens {
+                render_schema_children(model, schema, depth + 1, seen, text);
+                let _ = writeln!(text, "{indent}}}");
+            }
         }
+    }
+}
+
+/// Whether a node expands into nested entries (and therefore needs braces).
+fn schema_has_children(model: &ApiModel, schema: &SchemaSpec, seen: &[String]) -> bool {
+    match schema {
+        SchemaSpec::Ref { ref_id } => {
+            if seen.iter().any(|id| id == ref_id) {
+                return false;
+            }
+            let mut nested_seen = seen.to_vec();
+            nested_seen.push(ref_id.clone());
+            model
+                .schema_by_ref_id(ref_id)
+                .is_some_and(|target| schema_has_children(model, target, &nested_seen))
+        }
+        SchemaSpec::Object { properties, .. } => !properties.is_empty(),
+        SchemaSpec::Array { items, .. } => items.as_deref().is_some_and(needs_item_line),
+        SchemaSpec::Composite { schemas, .. } => !schemas.is_empty(),
+        SchemaSpec::Primitive { .. } | SchemaSpec::Unknown { .. } => false,
     }
 }
 
@@ -227,14 +272,13 @@ fn has_structure(schema: &SchemaSpec) -> bool {
     )
 }
 
-/// Builds the visible part of a schema line: label/shape, required marker,
-/// description, and compact metadata.
-fn decorate(head: String, required: bool, meta: SchemaMeta) -> String {
-    let mut line = head;
+/// Builds a visible schema entry: `label: type`, required marker, description,
+/// and compact metadata.
+fn schema_line(label: &str, type_label: &str, required: bool, meta: SchemaMeta) -> String {
+    let mut line = format!("{label}: {type_label}");
     if required {
-        line.push_str(", required");
+        line.push_str(" (required)");
     }
-    line.push(')');
     if let Some(description) = &meta.description {
         let _ = write!(line, ": {description}");
     }
@@ -584,20 +628,20 @@ mod tests {
             help.contains("Request body\n  application/json (required)"),
             "{help}"
         );
-        assert!(help.contains("Body (Order, object)"), "{help}");
+        assert!(help.contains("body: Order (object) {"), "{help}");
         assert!(
-            help.contains("id (integer, required): Order id [minimum: 1]"),
+            help.contains("id: integer (required): Order id [minimum: 1]"),
             "{help}"
         );
         assert!(
-            help.contains("quantity (integer): Number of units [minimum: 1; default: 1]"),
+            help.contains("quantity: integer: Number of units [minimum: 1; default: 1]"),
             "{help}"
         );
         assert!(
-            help.contains(r#"status (string, required) [enum: "open", "closed"; example: "open"]"#),
+            help.contains(r#"status: string (required) [enum: "open", "closed"; example: "open"]"#),
             "{help}"
         );
-        assert!(help.contains("tags (array<string>)"), "{help}");
+        assert!(help.contains("tags: array<string>"), "{help}");
         assert!(!help.contains("$ref"), "{help}");
     }
 
@@ -609,9 +653,9 @@ mod tests {
             &operation(vec![], vec![], Some(place_order_body()), vec![]),
         );
 
-        assert!(help.contains("owner (object)"), "{help}");
+        assert!(help.contains("owner: object {"), "{help}");
         assert!(
-            help.contains("name (string, required): Owner name"),
+            help.contains("name: string (required): Owner name"),
             "{help}"
         );
         assert!(!help.contains(r#"{"type":"string"}"#), "{help}");
@@ -647,9 +691,9 @@ mod tests {
         };
         let help = command_after_help(&model, &operation(vec![], vec![], Some(body), vec![]));
 
-        assert!(help.contains("Body (Cart, object)"), "{help}");
-        assert!(help.contains("orders (array<Order>)"), "{help}");
-        assert!(help.contains("items (Order, object)"), "{help}");
+        assert!(help.contains("body: Cart (object) {"), "{help}");
+        assert!(help.contains("orders: array<Order> {"), "{help}");
+        assert!(help.contains("items: Order (object)"), "{help}");
     }
 
     #[test]
@@ -676,8 +720,8 @@ mod tests {
         };
         let help = command_after_help(&model, &operation(vec![], vec![], Some(body), vec![]));
 
-        assert!(help.contains("Body (Node, object)"), "{help}");
-        assert!(help.contains("next (Node, recursive)"), "{help}");
+        assert!(help.contains("body: Node (object) {"), "{help}");
+        assert!(help.contains("next: Node (recursive)"), "{help}");
         assert!(!help.contains("$ref"), "{help}");
     }
 
@@ -701,9 +745,9 @@ mod tests {
         };
         let help = command_after_help(&model, &operation(vec![], vec![], Some(body), vec![]));
 
-        assert!(help.contains("Body (oneOf)"), "{help}");
-        assert!(help.contains("option 1 (string)"), "{help}");
-        assert!(help.contains("option 2 (Order, object)"), "{help}");
+        assert!(help.contains("body: oneOf {"), "{help}");
+        assert!(help.contains("option 1: string"), "{help}");
+        assert!(help.contains("option 2: Order (object) {"), "{help}");
     }
 
     #[test]
@@ -731,21 +775,21 @@ mod tests {
         let responses = vec![
             ResponseSpec {
                 status_code: "200".to_owned(),
-                content_type: "application/json".to_owned(),
+                content_type: Some("application/json".to_owned()),
                 schema: Some(SchemaSpec::Ref {
                     ref_id: "Order".to_owned(),
                 }),
             },
             ResponseSpec {
                 status_code: "404".to_owned(),
-                content_type: "application/json".to_owned(),
+                content_type: Some("application/json".to_owned()),
                 schema: Some(SchemaSpec::Ref {
                     ref_id: "Error".to_owned(),
                 }),
             },
             ResponseSpec {
                 status_code: "204".to_owned(),
-                content_type: String::new(),
+                content_type: None,
                 schema: None,
             },
         ];
@@ -753,14 +797,14 @@ mod tests {
 
         assert!(help.contains("Responses"), "{help}");
         assert!(help.contains("200 application/json"), "{help}");
-        assert!(help.contains("Body (Order, object)"), "{help}");
+        assert!(help.contains("body: Order (object) {"), "{help}");
         assert!(
-            help.contains("id (integer, required) [minimum: 1]"),
+            help.contains("id: integer (required) [minimum: 1]"),
             "{help}"
         );
         assert!(help.contains("404 application/json"), "{help}");
-        assert!(help.contains("Body (Error, object)"), "{help}");
-        assert!(help.contains("message (string, required)"), "{help}");
+        assert!(help.contains("body: Error (object) {"), "{help}");
+        assert!(help.contains("message: string (required)"), "{help}");
         assert!(help.contains("204"), "{help}");
         assert!(!help.contains("$ref"), "{help}");
     }
@@ -777,7 +821,7 @@ mod tests {
         };
         let help = command_after_help(&model, &operation(vec![], vec![], Some(body), vec![]));
         assert!(
-            help.contains("Body (Missing, unresolved reference)"),
+            help.contains("body: Missing (unresolved reference)"),
             "{help}"
         );
         assert!(!help.contains("$ref"), "{help}");
@@ -862,11 +906,8 @@ mod tests {
             )),
         };
         let help = command_after_help(&model, &operation(vec![], vec![], Some(body), vec![]));
-        assert!(help.contains("tags (array<string>)"), "{help}");
-        assert!(
-            help.contains(r#"items (string) [enum: "a", "b"]"#),
-            "{help}"
-        );
+        assert!(help.contains("tags: array<string> {"), "{help}");
+        assert!(help.contains(r#"items: string [enum: "a", "b"]"#), "{help}");
     }
 
     #[test]
@@ -880,7 +921,7 @@ mod tests {
             }),
         };
         let help = command_after_help(&model, &operation(vec![], vec![], Some(body), vec![]));
-        assert!(help.contains("Body (unknown)"), "{help}");
+        assert!(help.contains("body: unknown"), "{help}");
         assert!(!help.contains("x-extension"), "{help}");
     }
 }

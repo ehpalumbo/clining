@@ -103,22 +103,22 @@ fn command_help_shows_body_walkthrough_with_required_fields() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("Request body"), "{stdout}");
     assert!(stdout.contains("application/json (required)"), "{stdout}");
-    assert!(stdout.contains("Body (Pet, object)"), "{stdout}");
+    assert!(stdout.contains("body: Pet (object) {"), "{stdout}");
     assert!(
-        stdout.contains("id (integer, required): Pet id [minimum: 1]"),
+        stdout.contains("id: integer (required): Pet id [minimum: 1]"),
         "{stdout}"
     );
     assert!(
-        stdout.contains("name (string, required): Pet name [minLength: 1]"),
+        stdout.contains("name: string (required): Pet name [minLength: 1]"),
         "{stdout}"
     );
     assert!(
-        stdout.contains(r#"status (string): Pet status in the store [enum: "available", "pending", "sold"; example: "available"]"#),
+        stdout.contains(r#"status: string: Pet status in the store [enum: "available", "pending", "sold"; example: "available"]"#),
         "{stdout}"
     );
-    assert!(stdout.contains("owner (Owner, object)"), "{stdout}");
+    assert!(stdout.contains("owner: Owner (object) {"), "{stdout}");
     assert!(
-        stdout.contains("name (string, required): Owner display name"),
+        stdout.contains("name: string (required): Owner display name"),
         "{stdout}"
     );
     assert!(!stdout.contains("$ref"), "{stdout}");
@@ -158,21 +158,21 @@ fn command_help_shows_resolved_reference_schema_and_responses() {
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("Request: POST /store/orders"), "{stdout}");
-    assert!(stdout.contains("Body (Order, object)"), "{stdout}");
+    assert!(stdout.contains("body: Order (object) {"), "{stdout}");
     assert!(
-        stdout.contains("id (integer, required): Order id [minimum: 1]"),
+        stdout.contains("id: integer (required): Order id [minimum: 1]"),
         "{stdout}"
     );
     assert!(
-        stdout.contains("quantity (integer): Number of units [minimum: 1; default: 1]"),
+        stdout.contains("quantity: integer: Number of units [minimum: 1; default: 1]"),
         "{stdout}"
     );
     assert!(stdout.contains("Responses"), "{stdout}");
     assert!(stdout.contains("200 application/json"), "{stdout}");
     assert!(stdout.contains("404 application/json"), "{stdout}");
-    assert!(stdout.contains("Body (Error, object)"), "{stdout}");
+    assert!(stdout.contains("body: Error (object) {"), "{stdout}");
     assert!(
-        stdout.contains("message (string, required): Human-readable error message"),
+        stdout.contains("message: string (required): Human-readable error message"),
         "{stdout}"
     );
     assert!(!stdout.contains("$ref"), "{stdout}");
@@ -191,10 +191,10 @@ fn command_help_renders_array_response_schemas() {
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("200 application/json"), "{stdout}");
-    assert!(stdout.contains("Body (array<Pet>)"), "{stdout}");
-    assert!(stdout.contains("items (Pet, object)"), "{stdout}");
-    assert!(stdout.contains("tags (array<string>)"), "{stdout}");
-    assert!(stdout.contains("owner (Owner, object)"), "{stdout}");
+    assert!(stdout.contains("body: array<Pet> {"), "{stdout}");
+    assert!(stdout.contains("items: Pet (object) {"), "{stdout}");
+    assert!(stdout.contains("tags: array<string>"), "{stdout}");
+    assert!(stdout.contains("owner: Owner (object) {"), "{stdout}");
     assert!(stdout.contains("400 application/json"), "{stdout}");
     assert!(!stdout.contains("$ref"), "{stdout}");
 }

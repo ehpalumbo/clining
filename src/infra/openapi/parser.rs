@@ -250,8 +250,8 @@ impl Parser {
 
     /// Flattens an operation's responses into one `ResponseSpec` per
     /// (status code, content type). A response with no body content keeps a
-    /// single entry with an empty content type so `--help` can list the status
-    /// code (for example `204`).
+    /// single entry with no content type so `--help` can list the status code
+    /// (for example `204`).
     fn to_response_specs(responses: &BTreeMap<String, Response>) -> Vec<ResponseSpec> {
         let mut out = Vec::new();
         for (status_code, response) in responses {
@@ -260,14 +260,14 @@ impl Parser {
                 has_content = true;
                 out.push(ResponseSpec {
                     status_code: status_code.clone(),
-                    content_type: content_type.clone(),
+                    content_type: Some(content_type.clone()),
                     schema: media.schema.as_ref().map(Self::parse_schema),
                 });
             }
             if !has_content {
                 out.push(ResponseSpec {
                     status_code: status_code.clone(),
-                    content_type: String::new(),
+                    content_type: None,
                     schema: None,
                 });
             }
@@ -745,7 +745,7 @@ mod tests {
         assert_eq!(create.responses.len(), 1);
         let resp = &create.responses[0];
         assert_eq!(resp.status_code, "200");
-        assert_eq!(resp.content_type, "application/json");
+        assert_eq!(resp.content_type.as_deref(), Some("application/json"));
         assert_eq!(
             resp.schema,
             Some(SchemaSpec::Object {
@@ -766,7 +766,7 @@ mod tests {
             .unwrap();
         let resp = &place_order.responses[0];
         assert_eq!(resp.status_code, "200");
-        assert_eq!(resp.content_type, "application/json");
+        assert_eq!(resp.content_type.as_deref(), Some("application/json"));
         assert_eq!(
             resp.schema,
             Some(SchemaSpec::Ref {
@@ -796,13 +796,11 @@ mod tests {
             .iter()
             .find(|r| r.status_code == "204")
             .expect("204 response is captured");
-        assert_eq!(no_content.content_type, "");
+        assert_eq!(no_content.content_type, None);
         assert!(no_content.schema.is_none());
-        assert!(
-            responses
-                .iter()
-                .any(|r| r.status_code == "200" && r.content_type == "application/json")
-        );
+        assert!(responses.iter().any(
+            |r| r.status_code == "200" && r.content_type.as_deref() == Some("application/json")
+        ));
     }
 
     #[test]

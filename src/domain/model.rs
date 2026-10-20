@@ -92,7 +92,9 @@ pub struct BodySpec {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResponseSpec {
     pub status_code: String,
-    pub content_type: String,
+    /// Body content type, or `None` when the response declares no body (for
+    /// example `204`).
+    pub content_type: Option<String>,
     pub schema: Option<SchemaSpec>,
 }
 

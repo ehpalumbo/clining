@@ -582,7 +582,7 @@ mod tests {
                     }),
                     responses: vec![ResponseSpec {
                         status_code: "200".to_owned(),
-                        content_type: "application/json".to_owned(),
+                        content_type: Some("application/json".to_owned()),
                         schema: Some(SchemaSpec::Ref {
                             ref_id: "Order".to_owned(),
                         }),
@@ -857,7 +857,7 @@ mod tests {
         assert!(help.contains("Request: GET /pets/{petId}"), "{help}");
         assert!(help.contains("Request body"), "{help}");
         assert!(help.contains("application/json"), "{help}");
-        assert!(help.contains("Body (object)"), "{help}");
+        assert!(help.contains("body: object"), "{help}");
         assert!(help.contains("Responses"), "{help}");
     }
 
@@ -897,7 +897,7 @@ mod tests {
         let footer = footer.unwrap();
         assert!(footer.contains("Request: GET /pets/{petId}"), "{footer}");
         assert!(
-            footer.contains("Request body\n  application/json (required)\n    Body (object)"),
+            footer.contains("Request body\n  application/json (required)\n    body: object"),
             "{footer}"
         );
     }
@@ -915,9 +915,9 @@ mod tests {
             .clone();
         let footer = command.get_after_help().map(|s| s.to_string());
         let footer = footer.unwrap();
-        assert!(footer.contains("Body (Order, object)"), "{footer}");
+        assert!(footer.contains("body: Order (object) {"), "{footer}");
         assert!(
-            footer.contains("id (integer, required): Order id [minimum: 1]"),
+            footer.contains("id: integer (required): Order id [minimum: 1]"),
             "{footer}"
         );
         assert!(footer.contains("Responses"), "{footer}");
