@@ -857,7 +857,10 @@ mod tests {
         assert!(help.contains("Request: GET /pets/{petId}"), "{help}");
         assert!(help.contains("Request body"), "{help}");
         assert!(help.contains("application/json"), "{help}");
-        assert!(help.contains("body: object"), "{help}");
+        assert!(
+            help.contains("application/json (required)\n    object"),
+            "{help}"
+        );
         assert!(help.contains("Responses"), "{help}");
     }
 
@@ -933,7 +936,7 @@ mod tests {
         let footer = footer.unwrap();
         assert!(footer.contains("Request: GET /pets/{petId}"), "{footer}");
         assert!(
-            footer.contains("Request body\n  application/json (required)\n    body: object"),
+            footer.contains("Request body\n  application/json (required)\n    object"),
             "{footer}"
         );
     }
@@ -951,7 +954,7 @@ mod tests {
             .clone();
         let footer = command.get_after_help().map(|s| s.to_string());
         let footer = footer.unwrap();
-        assert!(footer.contains("body: Order (object) {"), "{footer}");
+        assert!(footer.contains("Order (object) {"), "{footer}");
         assert!(
             footer.contains("id: integer (required): Order id (minimum: 1)"),
             "{footer}"

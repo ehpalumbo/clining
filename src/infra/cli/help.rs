@@ -120,7 +120,10 @@ fn render_request_body(model: &ApiModel, body: &BodySpec, text: &mut String) {
         }
     );
     match &body.schema {
-        Some(schema) => render_schema_entry(model, schema, "body", 2, false, &mut Vec::new(), text),
+        // No label: the schema already sits under the content type, and a
+        // "body" key here could be mistaken for a wrapper property of the
+        // JSON payload.
+        Some(schema) => render_schema_entry(model, schema, "", 2, false, &mut Vec::new(), text),
         None => {
             let _ = writeln!(text, "    schema not documented");
         }
@@ -137,7 +140,8 @@ fn render_response(model: &ApiModel, response: &ResponseSpec, text: &mut String)
         }
     }
     match &response.schema {
-        Some(schema) => render_schema_entry(model, schema, "body", 2, false, &mut Vec::new(), text),
+        // See render_request_body: avoid implying a "body" wrapper key.
+        Some(schema) => render_schema_entry(model, schema, "", 2, false, &mut Vec::new(), text),
         None if response.content_type.is_none() => {}
         None => {
             let _ = writeln!(text, "    schema not documented");
@@ -790,7 +794,7 @@ mod tests {
             help.contains("Request body\n  application/json (required)"),
             "{help}"
         );
-        assert!(help.contains("body: Order (object) {"), "{help}");
+        assert!(help.contains("Order (object) {"), "{help}");
         assert!(
             help.contains("id: integer (required): Order id (minimum: 1)"),
             "{help}"
@@ -853,7 +857,7 @@ mod tests {
         };
         let help = command_after_help(&model, &operation(vec![], vec![], Some(body), vec![]));
 
-        assert!(help.contains("body: Cart (object) {"), "{help}");
+        assert!(help.contains("Cart (object) {"), "{help}");
         assert!(help.contains("orders: array<Order> ["), "{help}");
         assert!(help.contains("Order (object)"), "{help}");
         assert!(!help.contains("items:"), "{help}");
@@ -883,7 +887,7 @@ mod tests {
         };
         let help = command_after_help(&model, &operation(vec![], vec![], Some(body), vec![]));
 
-        assert!(help.contains("body: Node (object) {"), "{help}");
+        assert!(help.contains("Node (object) {"), "{help}");
         assert!(help.contains("next: Node (recursive) (required)"), "{help}");
         assert!(!help.contains("$ref"), "{help}");
     }
@@ -928,7 +932,7 @@ mod tests {
         };
         let help = command_after_help(&model, &operation(vec![], vec![], Some(body), vec![]));
 
-        assert!(help.contains("body: Alias (Pet, object) {"), "{help}");
+        assert!(help.contains("Alias (Pet, object) {"), "{help}");
         assert!(help.contains("id: integer (required): Pet id"), "{help}");
 
         let param = Param {
@@ -966,7 +970,7 @@ mod tests {
         };
         let help = command_after_help(&model, &operation(vec![], vec![], Some(body), vec![]));
 
-        assert!(help.contains("body: oneOf {"), "{help}");
+        assert!(help.contains("oneOf {"), "{help}");
         assert!(help.contains("option 1: string"), "{help}");
         assert!(help.contains("option 2: Order (object) {"), "{help}");
     }
@@ -1005,7 +1009,7 @@ mod tests {
         };
         let help = command_after_help(&model, &operation(vec![], vec![], Some(body), vec![]));
 
-        assert!(help.contains("body: Extended (allOf) {"), "{help}");
+        assert!(help.contains("Extended (allOf) {"), "{help}");
         assert!(help.contains("part 1: Base (object) {"), "{help}");
         assert!(
             help.contains("name: string (required): Display name"),
@@ -1060,13 +1064,13 @@ mod tests {
 
         assert!(help.contains("Responses"), "{help}");
         assert!(help.contains("200 application/json"), "{help}");
-        assert!(help.contains("body: Order (object) {"), "{help}");
+        assert!(help.contains("Order (object) {"), "{help}");
         assert!(
             help.contains("id: integer (required) (minimum: 1)"),
             "{help}"
         );
         assert!(help.contains("404 application/json"), "{help}");
-        assert!(help.contains("body: Error (object) {"), "{help}");
+        assert!(help.contains("Error (object) {"), "{help}");
         assert!(help.contains("message: string (required)"), "{help}");
         assert!(help.contains("204"), "{help}");
         assert!(!help.contains("$ref"), "{help}");
@@ -1083,10 +1087,7 @@ mod tests {
             }),
         };
         let help = command_after_help(&model, &operation(vec![], vec![], Some(body), vec![]));
-        assert!(
-            help.contains("body: Missing (unresolved reference)"),
-            "{help}"
-        );
+        assert!(help.contains("Missing (unresolved reference)"), "{help}");
         assert!(!help.contains("$ref"), "{help}");
 
         let no_schema = BodySpec {
@@ -1256,7 +1257,7 @@ mod tests {
             }),
         };
         let help = command_after_help(&model, &operation(vec![], vec![], Some(body), vec![]));
-        assert!(help.contains("body: unknown"), "{help}");
+        assert!(help.contains("\n    unknown"), "{help}");
         assert!(!help.contains("x-extension"), "{help}");
     }
 }
