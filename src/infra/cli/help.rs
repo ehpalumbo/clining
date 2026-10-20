@@ -112,6 +112,43 @@ fn render_response(model: &ApiModel, response: &ResponseSpec, text: &mut String)
     }
 }
 
+/// Outcome of following a local `$ref`, including alias components.
+enum RefResolution<'a> {
+    /// The final non-ref schema, with the chain of ref ids followed to reach it.
+    Target {
+        chain: Vec<String>,
+        schema: &'a SchemaSpec,
+    },
+    /// The chain loops back to a ref that is already being rendered.
+    Recursive,
+    /// A ref in the chain is not present in the registry.
+    Unresolved,
+}
+
+/// Follows local `$ref` aliases until a concrete schema is reached.
+///
+/// A component may itself be a `$ref` (for example `Alias: {$ref: Pet}`), so
+/// resolving one level is not enough to find the shape or children. `seen` is
+/// the stack of refs currently being expanded, which terminates cycles.
+fn resolve_ref<'a>(model: &'a ApiModel, ref_id: &str, seen: &[String]) -> RefResolution<'a> {
+    let mut chain = vec![ref_id.to_owned()];
+    if seen.iter().any(|id| id == ref_id) {
+        return RefResolution::Recursive;
+    }
+    let mut current = model.schema_by_ref_id(ref_id);
+    while let Some(SchemaSpec::Ref { ref_id: next }) = current {
+        if seen.iter().any(|id| id == next) || chain.iter().any(|id| id == next) {
+            return RefResolution::Recursive;
+        }
+        chain.push(next.clone());
+        current = model.schema_by_ref_id(next);
+    }
+    match current {
+        Some(schema) => RefResolution::Target { chain, schema },
+        None => RefResolution::Unresolved,
+    }
+}
+
 /// Renders one schema node (a property, body, response, array item, or
 /// composite branch) with its label, resolved shape, metadata, and children.
 /// Nested structures use JSON-like delimiters (braces for objects/composites,
@@ -128,39 +165,39 @@ fn render_schema_entry(
 ) {
     let indent = "  ".repeat(depth);
     match schema {
-        SchemaSpec::Ref { ref_id } => {
-            if seen.iter().any(|id| id == ref_id) {
+        SchemaSpec::Ref { ref_id } => match resolve_ref(model, ref_id, seen) {
+            RefResolution::Recursive => {
                 let item = format!("{ref_id} (recursive)");
                 let _ = writeln!(text, "{indent}{}", schema_head(label, &item));
-                return;
             }
-            let Some(target) = model.schema_by_ref_id(ref_id) else {
+            RefResolution::Unresolved => {
                 let item = format!("{ref_id} (unresolved reference)");
                 let _ = writeln!(text, "{indent}{}", schema_head(label, &item));
-                return;
-            };
-            let type_label = if label == ref_id {
-                type_display(target)
-            } else {
-                format!("{ref_id} ({})", type_display(target))
-            };
-            let mut line = schema_line(label, &type_label, required, meta_from_schema(target));
-            let mut nested_seen = seen.clone();
-            nested_seen.push(ref_id.clone());
-            let opens = schema_has_children(model, target, &nested_seen);
-            let (open, close) = delimiters(target);
-            if opens {
-                line.push(' ');
-                line.push_str(open);
             }
-            let _ = writeln!(text, "{indent}{line}");
-            if opens {
-                seen.push(ref_id.clone());
-                render_schema_children(model, target, depth + 1, seen, text);
-                seen.pop();
-                let _ = writeln!(text, "{indent}{close}");
+            RefResolution::Target {
+                chain,
+                schema: target,
+            } => {
+                let type_label = ref_type_label(label, ref_id, &chain, target);
+                let mut line = schema_line(label, &type_label, required, meta_from_schema(target));
+                let mut nested_seen = seen.clone();
+                nested_seen.extend(chain.iter().cloned());
+                let opens = schema_has_children(model, target, &nested_seen);
+                let (open, close) = delimiters(target);
+                if opens {
+                    line.push(' ');
+                    line.push_str(open);
+                }
+                let _ = writeln!(text, "{indent}{line}");
+                if opens {
+                    let base = seen.len();
+                    seen.extend(chain.iter().cloned());
+                    render_schema_children(model, target, depth + 1, seen, text);
+                    seen.truncate(base);
+                    let _ = writeln!(text, "{indent}{close}");
+                }
             }
-        }
+        },
         _ => {
             let mut line = schema_line(
                 label,
@@ -265,6 +302,11 @@ fn render_schema_children(
                 );
             }
         }
+        // Defensive: callers normally resolve refs before rendering children,
+        // but following refs here keeps alias components rendering correctly.
+        SchemaSpec::Ref { .. } => {
+            render_schema_entry(model, schema, "", depth, false, seen, text);
+        }
         _ => {}
     }
 }
@@ -331,23 +373,38 @@ fn type_display(schema: &SchemaSpec) -> String {
     }
 }
 
-fn resolved_type_label(model: &ApiModel, schema: &SchemaSpec) -> String {
-    match schema {
-        SchemaSpec::Ref { ref_id } => match model.schema_by_ref_id(ref_id) {
-            Some(target) => format!("{ref_id} ({})", type_display(target)),
-            None => format!("{ref_id} (unresolved)"),
-        },
-        _ => type_display(schema),
+/// Builds the `label: type` type portion for a resolved ref.
+///
+/// A direct ref renders as `Order (object)`. Alias chains keep the intermediate
+/// component names (`Alias (Pet, object)`) so the resolved shape stays
+/// traceable back to the spec.
+fn ref_type_label(label: &str, ref_id: &str, chain: &[String], target: &SchemaSpec) -> String {
+    let target_type = type_display(target);
+    if label == ref_id {
+        return target_type;
     }
+    if chain.len() <= 1 {
+        return format!("{ref_id} ({target_type})");
+    }
+    let mut names: Vec<String> = chain[1..].to_vec();
+    names.push(target_type);
+    format!("{ref_id} ({})", names.join(", "))
 }
 
-/// Resolves a schema for metadata display, following one local ref so a
+/// Resolves a schema for metadata display, following local ref aliases so a
 /// parameter declared as `$ref: Status` still shows the target's enum and type.
 fn resolved_meta(model: &ApiModel, schema: &SchemaSpec) -> (String, SchemaMeta) {
     match schema {
-        SchemaSpec::Ref { ref_id } => match model.schema_by_ref_id(ref_id) {
-            Some(target) => (resolved_type_label(model, schema), meta_from_schema(target)),
-            None => (format!("{ref_id} (unresolved)"), SchemaMeta::default()),
+        SchemaSpec::Ref { ref_id } => match resolve_ref(model, ref_id, &[]) {
+            RefResolution::Target {
+                chain,
+                schema: target,
+            } => (
+                ref_type_label("", ref_id, &chain, target),
+                meta_from_schema(target),
+            ),
+            RefResolution::Recursive => (format!("{ref_id} (recursive)"), SchemaMeta::default()),
+            RefResolution::Unresolved => (format!("{ref_id} (unresolved)"), SchemaMeta::default()),
         },
         _ => (type_display(schema), meta_from_schema(schema)),
     }
@@ -749,6 +806,64 @@ mod tests {
         assert!(help.contains("body: Node (object) {"), "{help}");
         assert!(help.contains("next: Node (recursive)"), "{help}");
         assert!(!help.contains("$ref"), "{help}");
+    }
+
+    #[test]
+    fn follows_ref_alias_components() {
+        let registry = BTreeMap::from([
+            (
+                "Pet".to_owned(),
+                object(
+                    BTreeMap::from([(
+                        "id".to_owned(),
+                        primitive(r#"{"type":"integer","description":"Pet id"}"#),
+                    )]),
+                    Some(r#"{"required":["id"]}"#.to_owned()),
+                ),
+            ),
+            (
+                "Alias".to_owned(),
+                SchemaSpec::Ref {
+                    ref_id: "Pet".to_owned(),
+                },
+            ),
+            (
+                "Status".to_owned(),
+                primitive(r#"{"type":"string","enum":["open","closed"]}"#),
+            ),
+            (
+                "AliasStatus".to_owned(),
+                SchemaSpec::Ref {
+                    ref_id: "Status".to_owned(),
+                },
+            ),
+        ]);
+        let model = model_with_registry(registry);
+        let body = BodySpec {
+            required: true,
+            content_type: "application/json".to_owned(),
+            schema: Some(SchemaSpec::Ref {
+                ref_id: "Alias".to_owned(),
+            }),
+        };
+        let help = command_after_help(&model, &operation(vec![], vec![], Some(body), vec![]));
+
+        assert!(help.contains("body: Alias (Pet, object) {"), "{help}");
+        assert!(help.contains("id: integer (required): Pet id"), "{help}");
+
+        let param = Param {
+            name: "status".to_owned(),
+            canonical_name: "status".to_owned(),
+            required: false,
+            description: None,
+            schema: Some(SchemaSpec::Ref {
+                ref_id: "AliasStatus".to_owned(),
+            }),
+        };
+        assert_eq!(
+            param_help_text(&model, &param),
+            r#"(optional) (type: AliasStatus (Status, string); enum: "open", "closed")"#
+        );
     }
 
     #[test]
