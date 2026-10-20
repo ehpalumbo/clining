@@ -853,7 +853,7 @@ mod tests {
         command.clone().debug_assert();
         let help = command.render_help().to_string();
         assert!(help.contains("--pet-id"), "{help}");
-        assert!(help.contains("[required]"), "{help}");
+        assert!(help.contains("(required)"), "{help}");
         assert!(help.contains("Request: GET /pets/{petId}"), "{help}");
         assert!(help.contains("Request body"), "{help}");
         assert!(help.contains("application/json"), "{help}");
@@ -878,8 +878,8 @@ mod tests {
             description: None,
             schema: None,
         };
-        assert_eq!(param_help_text(&model, &required), "Numeric id [required]");
-        assert_eq!(param_help_text(&model, &optional), "[optional]");
+        assert_eq!(param_help_text(&model, &required), "Numeric id (required)");
+        assert_eq!(param_help_text(&model, &optional), "(optional)");
     }
 
     #[test]
@@ -917,7 +917,7 @@ mod tests {
         let footer = footer.unwrap();
         assert!(footer.contains("body: Order (object) {"), "{footer}");
         assert!(
-            footer.contains("id: integer (required): Order id [minimum: 1]"),
+            footer.contains("id: integer (required): Order id (minimum: 1)"),
             "{footer}"
         );
         assert!(footer.contains("Responses"), "{footer}");

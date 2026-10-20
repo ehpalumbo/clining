@@ -52,14 +52,14 @@ pub(crate) fn param_help_text(model: &ApiModel, param: &Param) -> String {
         text.push(' ');
     }
     text.push_str(if param.required {
-        "[required]"
+        "(required)"
     } else {
-        "[optional]"
+        "(optional)"
     });
     if let Some(schema) = &param.schema {
         let details = parameter_details(model, schema);
         if !details.is_empty() {
-            let _ = write!(text, " [{details}]");
+            let _ = write!(text, " ({details})");
         }
     }
     text
@@ -114,8 +114,9 @@ fn render_response(model: &ApiModel, response: &ResponseSpec, text: &mut String)
 
 /// Renders one schema node (a property, body, response, array item, or
 /// composite branch) with its label, resolved shape, metadata, and children.
-/// Nested structure uses JSON-like braces, so the outline stays unambiguous
-/// even when descriptions contain punctuation.
+/// Nested structures use JSON-like delimiters (braces for objects/composites,
+/// brackets for arrays), so the outline stays unambiguous even when
+/// descriptions contain punctuation.
 fn render_schema_entry(
     model: &ApiModel,
     schema: &SchemaSpec,
@@ -129,11 +130,13 @@ fn render_schema_entry(
     match schema {
         SchemaSpec::Ref { ref_id } => {
             if seen.iter().any(|id| id == ref_id) {
-                let _ = writeln!(text, "{indent}{label}: {ref_id} (recursive)");
+                let item = format!("{ref_id} (recursive)");
+                let _ = writeln!(text, "{indent}{}", schema_head(label, &item));
                 return;
             }
             let Some(target) = model.schema_by_ref_id(ref_id) else {
-                let _ = writeln!(text, "{indent}{label}: {ref_id} (unresolved reference)");
+                let item = format!("{ref_id} (unresolved reference)");
+                let _ = writeln!(text, "{indent}{}", schema_head(label, &item));
                 return;
             };
             let type_label = if label == ref_id {
@@ -145,15 +148,17 @@ fn render_schema_entry(
             let mut nested_seen = seen.clone();
             nested_seen.push(ref_id.clone());
             let opens = schema_has_children(model, target, &nested_seen);
+            let (open, close) = delimiters(target);
             if opens {
-                line.push_str(" {");
+                line.push(' ');
+                line.push_str(open);
             }
             let _ = writeln!(text, "{indent}{line}");
             if opens {
                 seen.push(ref_id.clone());
                 render_schema_children(model, target, depth + 1, seen, text);
                 seen.pop();
-                let _ = writeln!(text, "{indent}}}");
+                let _ = writeln!(text, "{indent}{close}");
             }
         }
         _ => {
@@ -164,19 +169,30 @@ fn render_schema_entry(
                 meta_from_schema(schema),
             );
             let opens = schema_has_children(model, schema, seen);
+            let (open, close) = delimiters(schema);
             if opens {
-                line.push_str(" {");
+                line.push(' ');
+                line.push_str(open);
             }
             let _ = writeln!(text, "{indent}{line}");
             if opens {
                 render_schema_children(model, schema, depth + 1, seen, text);
-                let _ = writeln!(text, "{indent}}}");
+                let _ = writeln!(text, "{indent}{close}");
             }
         }
     }
 }
 
-/// Whether a node expands into nested entries (and therefore needs braces).
+/// Array bodies use square brackets; all other containers use braces.
+fn delimiters(schema: &SchemaSpec) -> (&'static str, &'static str) {
+    match schema {
+        SchemaSpec::Array { .. } => ("[", "]"),
+        _ => ("{", "}"),
+    }
+}
+
+/// Whether a node expands into nested entries (and therefore needs a bracketed
+/// or braced body).
 fn schema_has_children(model: &ApiModel, schema: &SchemaSpec, seen: &[String]) -> bool {
     match schema {
         SchemaSpec::Ref { ref_id } => {
@@ -225,7 +241,7 @@ fn render_schema_children(
             if let Some(items) = items.as_deref()
                 && needs_item_line(items)
             {
-                render_schema_entry(model, items, "items", depth, false, seen, text);
+                render_schema_entry(model, items, "", depth, false, seen, text);
             }
         }
         SchemaSpec::Composite {
@@ -273,9 +289,10 @@ fn has_structure(schema: &SchemaSpec) -> bool {
 }
 
 /// Builds a visible schema entry: `label: type`, required marker, description,
-/// and compact metadata.
+/// and compact metadata. Array items have no label because the enclosing
+/// brackets already identify them.
 fn schema_line(label: &str, type_label: &str, required: bool, meta: SchemaMeta) -> String {
-    let mut line = format!("{label}: {type_label}");
+    let mut line = schema_head(label, type_label);
     if required {
         line.push_str(" (required)");
     }
@@ -284,9 +301,17 @@ fn schema_line(label: &str, type_label: &str, required: bool, meta: SchemaMeta) 
     }
     let details = meta.details();
     if !details.is_empty() {
-        let _ = write!(line, " [{}]", details.join("; "));
+        let _ = write!(line, " ({})", details.join("; "));
     }
     line
+}
+
+fn schema_head(label: &str, type_label: &str) -> String {
+    if label.is_empty() {
+        type_label.to_owned()
+    } else {
+        format!("{label}: {type_label}")
+    }
 }
 
 fn type_display(schema: &SchemaSpec) -> String {
@@ -630,15 +655,15 @@ mod tests {
         );
         assert!(help.contains("body: Order (object) {"), "{help}");
         assert!(
-            help.contains("id: integer (required): Order id [minimum: 1]"),
+            help.contains("id: integer (required): Order id (minimum: 1)"),
             "{help}"
         );
         assert!(
-            help.contains("quantity: integer: Number of units [minimum: 1; default: 1]"),
+            help.contains("quantity: integer: Number of units (minimum: 1; default: 1)"),
             "{help}"
         );
         assert!(
-            help.contains(r#"status: string (required) [enum: "open", "closed"; example: "open"]"#),
+            help.contains(r#"status: string (required) (enum: "open", "closed"; example: "open")"#),
             "{help}"
         );
         assert!(help.contains("tags: array<string>"), "{help}");
@@ -692,8 +717,9 @@ mod tests {
         let help = command_after_help(&model, &operation(vec![], vec![], Some(body), vec![]));
 
         assert!(help.contains("body: Cart (object) {"), "{help}");
-        assert!(help.contains("orders: array<Order> {"), "{help}");
-        assert!(help.contains("items: Order (object)"), "{help}");
+        assert!(help.contains("orders: array<Order> ["), "{help}");
+        assert!(help.contains("Order (object)"), "{help}");
+        assert!(!help.contains("items:"), "{help}");
     }
 
     #[test]
@@ -799,7 +825,7 @@ mod tests {
         assert!(help.contains("200 application/json"), "{help}");
         assert!(help.contains("body: Order (object) {"), "{help}");
         assert!(
-            help.contains("id: integer (required) [minimum: 1]"),
+            help.contains("id: integer (required) (minimum: 1)"),
             "{help}"
         );
         assert!(help.contains("404 application/json"), "{help}");
@@ -850,7 +876,7 @@ mod tests {
         let help = param_help_text(&model, &param);
         assert_eq!(
             help,
-            r#"Filter by status [required] [type: string; enum: "open", "closed"; minLength: 2; example: "open"]"#
+            r#"Filter by status (required) (type: string; enum: "open", "closed"; minLength: 2; example: "open")"#
         );
     }
 
@@ -872,7 +898,7 @@ mod tests {
         };
         assert_eq!(
             param_help_text(&model, &optional),
-            r#"[optional] [type: Status (string); enum: "open", "closed"]"#
+            r#"(optional) (type: Status (string); enum: "open", "closed")"#
         );
     }
 
@@ -888,7 +914,7 @@ mod tests {
         };
         assert_eq!(
             param_help_text(&model, &enum_only),
-            r#"[optional] [type: string; enum: "asc", "desc"]"#
+            r#"(optional) (type: string; enum: "asc", "desc")"#
         );
 
         let body = BodySpec {
@@ -906,8 +932,9 @@ mod tests {
             )),
         };
         let help = command_after_help(&model, &operation(vec![], vec![], Some(body), vec![]));
-        assert!(help.contains("tags: array<string> {"), "{help}");
-        assert!(help.contains(r#"items: string [enum: "a", "b"]"#), "{help}");
+        assert!(help.contains("tags: array<string> ["), "{help}");
+        assert!(help.contains(r#"string (enum: "a", "b")"#), "{help}");
+        assert!(!help.contains("items:"), "{help}");
     }
 
     #[test]
