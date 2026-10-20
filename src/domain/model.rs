@@ -74,6 +74,10 @@ pub struct Param {
     pub required: bool,
     #[serde(default)]
     pub description: Option<String>,
+    /// Value shape from the spec, captured for `--help`. Optional so models
+    /// persisted before schema capture still load.
+    #[serde(default)]
+    pub schema: Option<SchemaSpec>,
 }
 
 /// Request body metadata; the typed schema is stored for help display only.

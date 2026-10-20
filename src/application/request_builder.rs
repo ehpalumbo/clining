@@ -170,6 +170,7 @@ mod tests {
             canonical_name: "pet-id".to_owned(),
             required: true,
             description: None,
+            schema: None,
         }
     }
 
@@ -179,6 +180,7 @@ mod tests {
             canonical_name: "status".to_owned(),
             required: false,
             description: None,
+            schema: None,
         }
     }
 
@@ -268,6 +270,7 @@ mod tests {
             canonical_name: "limit".to_owned(),
             required: true,
             description: None,
+            schema: None,
         };
         let operation = operation_with("/pets", vec![], vec![required], None);
         let err = build_request(
@@ -288,6 +291,7 @@ mod tests {
             canonical_name: "pet-id".to_owned(),
             required: false,
             description: None,
+            schema: None,
         };
         let operation = operation_with("/pets/{petId}", vec![optional], vec![], None);
         let req = build_request(

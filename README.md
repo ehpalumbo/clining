@@ -41,8 +41,16 @@ clining <my-api-name> <command-group> <command> --<param> <value> [--<param> <va
 ```bash
 clining <my-api-name> --help                      # list command groups
 clining <my-api-name> <command-group> --help      # list commands in the group
-clining <my-api-name> <command-group> <command> --help  # params + body schema hint
+clining <my-api-name> <command-group> <command> --help  # full input/output documentation
 ```
+
+Command-level `--help` is the agent-facing documentation surface. It renders the
+summary and request line, each parameter's value shape (type, enum values,
+examples, and constraints), a field-by-field walkthrough of the request body,
+and the documented response status codes, content types, and schemas. Local
+`$ref`s are shown as their resolved component names and shapes; recursive
+schemas are marked rather than expanded forever. Help never sends an HTTP
+request.
 
 ## Storage Layout
 

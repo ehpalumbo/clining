@@ -8,6 +8,33 @@
   ],
   "components": {
     "schemas": {
+      "Owner": {
+        "type": "object",
+        "required": ["name"],
+        "properties": {
+          "name": { "type": "string", "description": "Owner display name" },
+          "email": { "type": "string", "format": "email" }
+        }
+      },
+      "Pet": {
+        "type": "object",
+        "required": ["id", "name"],
+        "properties": {
+          "id": { "type": "integer", "description": "Pet id", "minimum": 1 },
+          "name": { "type": "string", "description": "Pet name", "minLength": 1 },
+          "status": {
+            "type": "string",
+            "description": "Pet status in the store",
+            "enum": ["available", "pending", "sold"],
+            "example": "available"
+          },
+          "tags": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "owner": { "$ref": "#/components/schemas/Owner" }
+        }
+      },
       "Order": {
         "type": "object",
         "required": ["id"],
@@ -15,6 +42,14 @@
           "id": { "type": "integer", "description": "Order id", "minimum": 1 },
           "petId": { "type": "integer" },
           "quantity": { "type": "integer", "description": "Number of units", "minimum": 1, "default": 1 }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "required": ["message"],
+        "properties": {
+          "message": { "type": "string", "description": "Human-readable error message" },
+          "code": { "type": "integer", "description": "Machine-readable error code" }
         }
       }
     }
@@ -27,13 +62,51 @@
         "description": "Returns all pets, optionally filtered",
         "tags": ["pets"],
         "parameters": [
-          { "name": "status", "in": "query", "description": "Filter by status" },
-          { "name": "tag", "in": "query", "description": "Filter by tag (repeatable)" }
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Filter by status",
+            "schema": {
+              "type": "string",
+              "enum": ["available", "pending", "sold"],
+              "example": "available"
+            }
+          },
+          {
+            "name": "tag",
+            "in": "query",
+            "description": "Filter by tag (repeatable)",
+            "schema": {
+              "type": "array",
+              "items": { "type": "string" }
+            }
+          }
         ],
         "requestBody": {
           "required": true,
           "content": {
             "application/json": { "schema": { "type": "object" } }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "A list of pets",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "$ref": "#/components/schemas/Pet" }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid filter",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" }
+              }
+            }
           }
         }
       },
@@ -44,13 +117,24 @@
         "requestBody": {
           "required": true,
           "content": {
-            "application/json": { "schema": { "type": "object" } }
+            "application/json": { "schema": { "$ref": "#/components/schemas/Pet" } }
           }
         },
         "responses": {
-          "200": {
+          "201": {
+            "description": "The created pet",
             "content": {
-              "application/json": { "schema": { "type": "object" } }
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Pet" }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid pet",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" }
+              }
             }
           }
         }
@@ -62,8 +146,32 @@
         "summary": "Get a pet by id",
         "tags": ["pets"],
         "parameters": [
-          { "name": "petId", "in": "path", "required": true, "description": "Numeric id of the pet" }
-        ]
+          {
+            "name": "petId",
+            "in": "path",
+            "required": true,
+            "description": "Numeric id of the pet",
+            "schema": { "type": "integer", "minimum": 1, "example": 42 }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The requested pet",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Pet" }
+              }
+            }
+          },
+          "404": {
+            "description": "Pet not found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" }
+              }
+            }
+          }
+        }
       }
     },
     "/store/orders": {
@@ -79,8 +187,15 @@
         },
         "responses": {
           "200": {
+            "description": "The placed order",
             "content": {
               "application/json": { "schema": { "$ref": "#/components/schemas/Order" } }
+            }
+          },
+          "404": {
+            "description": "Pet not found",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
             }
           }
         }
@@ -88,14 +203,27 @@
     },
     "/ping": {
       "get": {
-        "summary": "Health check"
+        "summary": "Health check",
+        "responses": {
+          "204": { "description": "Healthy" }
+        }
       }
     },
     "/binary": {
       "get": {
         "operationId": "getBinary",
         "summary": "Fetch a binary blob",
-        "tags": ["pets"]
+        "tags": ["pets"],
+        "responses": {
+          "200": {
+            "description": "Raw bytes",
+            "content": {
+              "application/octet-stream": {
+                "schema": { "type": "string", "format": "binary" }
+              }
+            }
+          }
+        }
       }
     }
   }

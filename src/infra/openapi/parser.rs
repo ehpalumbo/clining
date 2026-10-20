@@ -231,6 +231,7 @@ impl Parser {
             canonical_name: cli_name(&p.name),
             required: p.required.unwrap_or(false),
             description: p.description.clone(),
+            schema: p.schema.as_ref().map(Self::parse_schema),
         }
     }
 
@@ -248,15 +249,26 @@ impl Parser {
     }
 
     /// Flattens an operation's responses into one `ResponseSpec` per
-    /// (status code, content type).
+    /// (status code, content type). A response with no body content keeps a
+    /// single entry with an empty content type so `--help` can list the status
+    /// code (for example `204`).
     fn to_response_specs(responses: &BTreeMap<String, Response>) -> Vec<ResponseSpec> {
         let mut out = Vec::new();
         for (status_code, response) in responses {
+            let mut has_content = false;
             for (content_type, media) in response.content.iter().flatten() {
+                has_content = true;
                 out.push(ResponseSpec {
                     status_code: status_code.clone(),
                     content_type: content_type.clone(),
                     schema: media.schema.as_ref().map(Self::parse_schema),
+                });
+            }
+            if !has_content {
+                out.push(ResponseSpec {
+                    status_code: status_code.clone(),
+                    content_type: String::new(),
+                    schema: None,
                 });
             }
         }
@@ -412,8 +424,8 @@ mod tests {
         "paths": {
             "/pets": {
                 "parameters": [
-                    { "name": "sort", "in": "query", "required": false },
-                    { "name": "limit", "in": "query", "required": true }
+                    { "name": "sort", "in": "query", "required": false, "schema": { "type": "string", "enum": ["asc", "desc"] } },
+                    { "name": "limit", "in": "query", "required": true, "schema": { "type": "integer", "minimum": 1 } }
                 ],
                 "get": {
                     "operationId": "listPets",
@@ -445,7 +457,7 @@ mod tests {
                 "get": {
                     "summary": "Get a pet by id",
                     "parameters": [
-                        { "name": "petId", "in": "path", "required": true, "description": "The numeric pet id" },
+                        { "name": "petId", "in": "path", "required": true, "description": "The numeric pet id", "schema": { "type": "integer", "minimum": 1 } },
                         { "name": "X-API-Key", "in": "header" }
                     ]
                 }
@@ -524,6 +536,19 @@ mod tests {
             "operation-level param overrides path-level"
         );
         assert_eq!(limit.canonical_name, "limit");
+        assert!(
+            limit.schema.is_none(),
+            "operation-level override replaces the whole parameter"
+        );
+
+        let sort = list.query_params.iter().find(|p| p.name == "sort").unwrap();
+        match sort.schema.as_ref().unwrap() {
+            SchemaSpec::Primitive { raw_json } => {
+                assert!(raw_json.contains(r#""type":"string""#), "{raw_json}");
+                assert!(raw_json.contains(r#""enum":["asc","desc"]"#), "{raw_json}");
+            }
+            other => panic!("expected primitive, got {other:?}"),
+        }
 
         let create = &pets.operations[1];
         let query_names: Vec<&str> = create
@@ -571,6 +596,13 @@ mod tests {
         assert_eq!(pet_id.canonical_name, "pet-id");
         assert!(pet_id.required);
         assert_eq!(pet_id.description.as_deref(), Some("The numeric pet id"));
+        match pet_id.schema.as_ref().unwrap() {
+            SchemaSpec::Primitive { raw_json } => {
+                assert!(raw_json.contains(r#""type":"integer""#), "{raw_json}");
+                assert!(raw_json.contains(r#""minimum":1"#), "{raw_json}");
+            }
+            other => panic!("expected primitive, got {other:?}"),
+        }
         assert!(get.request_body.is_none());
     }
 
@@ -740,6 +772,36 @@ mod tests {
             Some(SchemaSpec::Ref {
                 ref_id: "Order".to_owned()
             })
+        );
+    }
+
+    #[test]
+    fn captures_contentless_responses_as_status_only_specs() {
+        let spec = r#"{
+            "openapi": "3.0.0",
+            "paths": {
+                "/ping": {
+                    "get": {
+                        "responses": {
+                            "204": { "description": "No content" },
+                            "200": { "content": { "application/json": { "schema": { "type": "object" } } } }
+                        }
+                    }
+                }
+            }
+        }"#;
+        let model = Parser.parse(spec.as_bytes()).unwrap();
+        let responses = &model.operation_groups[0].operations[0].responses;
+        let no_content = responses
+            .iter()
+            .find(|r| r.status_code == "204")
+            .expect("204 response is captured");
+        assert_eq!(no_content.content_type, "");
+        assert!(no_content.schema.is_none());
+        assert!(
+            responses
+                .iter()
+                .any(|r| r.status_code == "200" && r.content_type == "application/json")
         );
     }
 

@@ -38,13 +38,13 @@ Depends only on the domain, and owns the port traits its services consume (see [
 - **API invocation** — resolve group/operation on a loaded model → resolve Bearer token from the stored auth reference → build request from params, body, and token → `HttpInvoker.send`.
 - **Auth resolution** — `application::auth` resolves `AuthConfig::Env`/`File` to a token value at install (validation) and invoke time; the secret never reaches the store, logs, or help.
 
-The clap tree builder reads the domain model directly (groups, operations, parameters, body hints) to render help at every level.
+The clap tree builder reads the domain model directly (groups, operations, parameters, body schemas, and response schemas) to render help at every level.
 
 ### Infrastructure (adapters)
 
 Implements the application ports and presentation; may depend on any inner layer:
 
-- **CLI** — clap: a static `install` subcommand plus a runtime-built dynamic command tree (per installed API) that resolves to install/invoke actions; reads stdin and writes stdout/stderr.
+- **CLI** — clap: a static `install` subcommand plus a runtime-built dynamic command tree (per installed API) that resolves to install/invoke actions; reads stdin and writes stdout/stderr. A presentation-only help renderer turns the domain model into plain-text parameter shapes and recursive request/response schema walkthroughs, attached to each command through clap's `after_help`; clap's `help_template` only arranges the static sections.
 - **Storage** — JSON file store under `~/.clining/` (override `CLINING_DIR`), atomic writes, distinct not-found vs. invalid-stored-model errors.
 - **OpenAPI parsing** — serde structs for the OpenAPI 3.0 subset mapped into the domain model.
 - **Source loading** — local file path or `http(s)://` URI → bytes.
