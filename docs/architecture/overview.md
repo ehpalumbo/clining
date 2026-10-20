@@ -26,16 +26,17 @@ clining is small today, but its two halves — learning an API versus invoking e
 
 The innermost layer, written in pure Rust with no external dependencies. It owns:
 
-- **Entities** — `ApiModel`, `ApiOperationGroup`, `ApiOperation`, `Param`, `HttpMethod`, `BodySpec`, plus request/response value types. Plain data with serde derives for persistence.
+- **Entities** — `ApiModel` (including optional `AuthConfig` token reference), `ApiOperationGroup`, `ApiOperation`, `Param`, `HttpMethod`, `BodySpec`, plus request/response value types. Plain data with serde derives for persistence.
 - **Rules** — pure functions for command naming (operationId kebab-casing, method+path fallback, collision disambiguation) and kebab-casing of parameter CLI names.
-- **Errors** — the domain error vocabulary (not found, invalid stored model, invalid spec, parameter/body errors, network, I/O).
+- **Errors** — the domain error vocabulary (not found, invalid stored model, invalid spec, parameter/body errors, auth errors, network, I/O).
 
 ### Application (services)
 
 Depends only on the domain, and owns the port traits its services consume (see [ADR-001](../decisions/adr-001-application-ports-and-owned-services.md)). Services own their dependencies as trait objects, keeping signatures free of generics and lifetimes:
 
-- **API model management** — install from spec (`SpecLoader` → `OpenApiParser` → `ApiStore.save`, with base-URL override handling) and load an installed model by name.
-- **API invocation** — resolve group/operation on a loaded model → build request from params and body → `HttpInvoker.send`.
+- **API model management** — install from spec (`SpecLoader` → `OpenApiParser` → `ApiStore.save`, with base-URL override and optional `AuthConfig` handling, including fail-fast token resolvability check) and load an installed model by name.
+- **API invocation** — resolve group/operation on a loaded model → resolve Bearer token from the stored auth reference → build request from params, body, and token → `HttpInvoker.send`.
+- **Auth resolution** — `application::auth` resolves `AuthConfig::Env`/`File` to a token value at install (validation) and invoke time; the secret never reaches the store, logs, or help.
 
 The clap tree builder reads the domain model directly (groups, operations, parameters, body hints) to render help at every level.
 
@@ -87,8 +88,8 @@ infrastructure  →  application  →  domain
 
 ### Install (learn)
 
-`cli args → API model service → SpecLoader → OpenApiParser → ApiModel → ApiStore.save → ~/.clining/<name>.json`
+`cli args → API model service → SpecLoader → OpenApiParser → ApiModel (+ AuthConfig reference, validated by resolving once) → ApiStore.save → ~/.clining/<name>.json`
 
 ### Invoke
 
-`cli args + stdin body → API model service (load model) → API invocation service → resolve → build request → HttpInvoker.send → response → body:stdout, status+headers:stderr, exit code`
+`cli args + stdin body → API model service (load model) → API invocation service → resolve auth token → build request (+ Authorization header) → HttpInvoker.send → response → body:stdout, status+headers:stderr, exit code`

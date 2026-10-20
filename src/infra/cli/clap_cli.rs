@@ -9,6 +9,7 @@ use clap::{Arg, ArgAction, Command};
 
 use crate::application::api_invocation::ApiInvocationService;
 use crate::application::api_model::ApiModelService;
+use crate::application::auth::auth_from_options;
 use crate::domain::errors::DomainError;
 use crate::domain::model::{
     ApiInvocationRequest, ApiModel, ApiOperation, ApiOperationGroup, BodySpec, Param, SchemaSpec,
@@ -53,6 +54,49 @@ fn install_command() -> Command {
                 .long("base-url")
                 .help("Override the base URL taken from servers[0].url."),
         )
+        .arg(
+            Arg::new("token_env")
+                .long("token-env")
+                .value_name("VAR")
+                .conflicts_with("token_file")
+                .help(
+                    "Read Bearer token from environment variable VAR (stored as reference only).",
+                ),
+        )
+        .arg(
+            Arg::new("token_file")
+                .long("token-file")
+                .value_name("PATH")
+                .conflicts_with("token_env")
+                .help(
+                    "Read Bearer token from file PATH (stored as reference only; relative paths are stored as absolute at install time).",
+                ),
+        )
+}
+
+/// Resolves a `--token-file` value to the path persisted in the model.
+///
+/// Absolute paths pass through verbatim; relative paths are joined onto the
+/// current working directory so the stored `AuthConfig::File` reference stays
+/// valid when later invocations run from a different directory. Joining (not
+/// `fs::canonicalize`) preserves the user's path text and needs no existence
+/// proof beyond the fail-fast resolve at install. An empty value is a
+/// `Parameter` error (checked here so `--token-file ""` cannot collapse to
+/// the working directory itself via `Path::join`).
+fn resolve_token_file_path(path: &str) -> Result<String, DomainError> {
+    if path.is_empty() {
+        return Err(DomainError::Parameter {
+            message: "token file path must not be empty".to_owned(),
+        });
+    }
+    let candidate = std::path::Path::new(path);
+    if candidate.is_absolute() {
+        return Ok(path.to_owned());
+    }
+    let cwd = std::env::current_dir().map_err(|e| DomainError::Io {
+        message: format!("failed to resolve current directory: {e}"),
+    })?;
+    Ok(cwd.join(candidate).to_string_lossy().into_owned())
 }
 
 /// Stand-in for the dynamic per-API subcommand, shown when no model is loaded.
@@ -313,7 +357,26 @@ impl CliApp {
             .get_one::<String>("spec_source")
             .expect("spec_source is required");
         let base_url = install.get_one::<String>("base_url").map(String::as_str);
-        match self.install(name, spec_source, base_url) {
+        let token_env = install.get_one::<String>("token_env").map(String::as_str);
+        let token_file = install.get_one::<String>("token_file").map(String::as_str);
+        let normalized_token_file: Option<String> = match token_file {
+            Some(path) => match resolve_token_file_path(path) {
+                Ok(absolute) => Some(absolute),
+                Err(err) => {
+                    eprintln!("error: {err}");
+                    return ExitCode::FAILURE;
+                }
+            },
+            None => None,
+        };
+        let auth = match auth_from_options(token_env, normalized_token_file.as_deref()) {
+            Ok(auth) => auth,
+            Err(err) => {
+                eprintln!("error: {err}");
+                return ExitCode::FAILURE;
+            }
+        };
+        match self.install(name, spec_source, base_url, auth) {
             Ok(()) => ExitCode::SUCCESS,
             Err(err) => {
                 eprintln!("error: {err}");
@@ -418,7 +481,15 @@ impl CliApp {
         // Read the request body from stdin, if any.
         let body = read_stdin_body();
         // Invoke the command using the service, passing the resolved request.
-        let invocation = ApiInvocationRequest::new(model.base_url.clone(), operation, params, body);
+        // The stored auth reference (if any) is cloned so the service can
+        // resolve the token and attach the Bearer header.
+        let invocation = ApiInvocationRequest::new(
+            model.base_url.clone(),
+            operation,
+            params,
+            body,
+            model.auth.clone(),
+        );
         let response = match self.invoker.invoke(&invocation) {
             Ok(response) => response,
             Err(err) => {
@@ -451,13 +522,15 @@ impl CliApp {
     }
 
     /// Installs an API model by learning it from the spec and persisting it to the store.
+    /// `auth = None` clears any previous auth (re-install overwrite semantics).
     fn install(
         &self,
         name: &str,
         spec_source: &str,
         base_url: Option<&str>,
+        auth: Option<crate::domain::model::AuthConfig>,
     ) -> Result<(), DomainError> {
-        let model = self.models.learn(name, spec_source, base_url)?;
+        let model = self.models.learn(name, spec_source, base_url, auth)?;
         let groups = model.operation_groups.len();
         let commands = model
             .operation_groups
@@ -567,6 +640,7 @@ mod tests {
             base_url: "https://example.com".to_owned(),
             version: ModelVersion::V1,
             schema_registry: BTreeMap::new(),
+            auth: None,
             operation_groups: vec![ApiOperationGroup {
                 name: "pets".to_owned(),
                 description: Some("Everything about your pets".to_owned()),
@@ -606,6 +680,7 @@ mod tests {
             name: "pets".to_owned(),
             base_url: "https://example.com".to_owned(),
             version: ModelVersion::V1,
+            auth: None,
             schema_registry: BTreeMap::from([(
                 "Order".to_owned(),
                 SchemaSpec::Object {
@@ -702,6 +777,120 @@ mod tests {
             Some("spec.json")
         );
         assert_eq!(install.get_one::<String>("base_url"), None);
+        assert_eq!(install.get_one::<String>("token_env"), None);
+        assert_eq!(install.get_one::<String>("token_file"), None);
+    }
+
+    #[test]
+    fn install_args_parse_with_token_env() {
+        let cmd = build_cli_command(None);
+        let matches = cmd
+            .try_get_matches_from([
+                "clining",
+                "install",
+                "pets",
+                "spec.json",
+                "--token-env",
+                "MY_TOKEN",
+            ])
+            .unwrap();
+        let install = matches.subcommand_matches("install").unwrap();
+        assert_eq!(
+            install.get_one::<String>("token_env").map(String::as_str),
+            Some("MY_TOKEN")
+        );
+        assert_eq!(install.get_one::<String>("token_file"), None);
+        let auth = auth_from_options(Some("MY_TOKEN"), None).expect("valid auth options");
+        assert_eq!(
+            auth,
+            Some(crate::domain::model::AuthConfig::Env {
+                var: "MY_TOKEN".to_owned()
+            })
+        );
+    }
+
+    #[test]
+    fn install_args_parse_with_token_file() {
+        let cmd = build_cli_command(None);
+        let matches = cmd
+            .try_get_matches_from([
+                "clining",
+                "install",
+                "pets",
+                "spec.json",
+                "--token-file",
+                "/tmp/token.txt",
+            ])
+            .unwrap();
+        let install = matches.subcommand_matches("install").unwrap();
+        assert_eq!(
+            install.get_one::<String>("token_file").map(String::as_str),
+            Some("/tmp/token.txt")
+        );
+        assert_eq!(install.get_one::<String>("token_env"), None);
+    }
+
+    #[test]
+    fn install_rejects_both_token_sources() {
+        let cmd = build_cli_command(None);
+        let err = cmd
+            .try_get_matches_from([
+                "clining",
+                "install",
+                "pets",
+                "spec.json",
+                "--token-env",
+                "A",
+                "--token-file",
+                "/tmp/t",
+            ])
+            .unwrap_err();
+        // clap usage error (exit code 2) via conflicts_with.
+        assert_eq!(err.exit_code(), 2);
+        let err = auth_from_options(Some("A"), Some("/tmp/t")).unwrap_err();
+        assert!(matches!(
+            err,
+            crate::domain::errors::DomainError::Parameter { .. }
+        ));
+    }
+
+    #[test]
+    fn install_help_documents_token_flags() {
+        let mut cmd = build_cli_command(None);
+        let install = cmd
+            .find_subcommand_mut("install")
+            .expect("install subcommand");
+        let help = install.render_help().to_string();
+        assert!(help.contains("--token-env"), "{help}");
+        assert!(help.contains("--token-file"), "{help}");
+        assert!(help.contains("stored as absolute"), "{help}");
+    }
+
+    #[test]
+    fn token_file_absolute_path_passes_through() {
+        assert_eq!(
+            resolve_token_file_path("/tmp/token.txt").unwrap(),
+            "/tmp/token.txt"
+        );
+    }
+
+    #[test]
+    fn token_file_relative_path_joins_current_dir() {
+        let cwd = std::env::current_dir().unwrap();
+        let joined = cwd.join("rel/tok.txt").to_string_lossy().into_owned();
+        assert_eq!(resolve_token_file_path("rel/tok.txt").unwrap(), joined);
+    }
+
+    #[test]
+    fn token_file_empty_path_is_parameter_error() {
+        // Empty must not collapse to the cwd via `Path::join` (which would
+        // later fail confusingly as "Is a directory"); it is a usage error.
+        let err = resolve_token_file_path("").unwrap_err();
+        assert!(
+            matches!(err, crate::domain::errors::DomainError::Parameter { .. }),
+            "{err}"
+        );
+        assert!(err.to_string().contains("must not be empty"), "{err}");
     }
 
     #[test]
@@ -875,6 +1064,7 @@ mod tests {
             name: "pets".to_owned(),
             base_url: "https://example.com".to_owned(),
             version: ModelVersion::V1,
+            auth: None,
             schema_registry: BTreeMap::from([(
                 "Node".to_owned(),
                 SchemaSpec::Object {

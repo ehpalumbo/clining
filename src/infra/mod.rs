@@ -1,5 +1,6 @@
 //! Infrastructure adapters implementing domain ports. May depend on any inner layer.
 
+pub mod auth;
 pub mod cli;
 pub mod http;
 pub mod openapi;
