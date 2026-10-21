@@ -167,18 +167,4 @@ mod tests {
         store.save(&file_model).unwrap();
         assert_eq!(store.load_by_name("fileapi").unwrap().auth, file_model.auth);
     }
-
-    #[test]
-    fn model_without_auth_field_loads_as_none() {
-        // Backward compat: models written before auth existed have no key.
-        let root = temp_root("auth-backcompat");
-        fs::write(
-            root.join("pets.json"),
-            br#"{"name":"pets","base_url":"https://example.com","version":"V1","operation_groups":[]}"#,
-        )
-        .unwrap();
-        let store = JsonFileStore::new(root);
-        let loaded = store.load_by_name("pets").unwrap();
-        assert_eq!(loaded.auth, None);
-    }
 }

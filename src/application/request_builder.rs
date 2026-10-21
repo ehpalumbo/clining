@@ -155,6 +155,7 @@ mod tests {
         ApiOperation {
             name: "test".to_owned(),
             summary: None,
+            description: None,
             method: HttpMethod::Post,
             path: path.to_owned(),
             path_params,
@@ -170,6 +171,7 @@ mod tests {
             canonical_name: "pet-id".to_owned(),
             required: true,
             description: None,
+            schema: None,
         }
     }
 
@@ -179,6 +181,7 @@ mod tests {
             canonical_name: "status".to_owned(),
             required: false,
             description: None,
+            schema: None,
         }
     }
 
@@ -268,6 +271,7 @@ mod tests {
             canonical_name: "limit".to_owned(),
             required: true,
             description: None,
+            schema: None,
         };
         let operation = operation_with("/pets", vec![], vec![required], None);
         let err = build_request(
@@ -288,6 +292,7 @@ mod tests {
             canonical_name: "pet-id".to_owned(),
             required: false,
             description: None,
+            schema: None,
         };
         let operation = operation_with("/pets/{petId}", vec![optional], vec![], None);
         let req = build_request(
@@ -306,6 +311,7 @@ mod tests {
         let spec = BodySpec {
             required: true,
             content_type: "application/json".to_owned(),
+            description: None,
             schema: None,
         };
         let operation = operation_with("/pets", vec![], vec![], Some(spec));
@@ -325,6 +331,7 @@ mod tests {
         let spec = BodySpec {
             required: true,
             content_type: "application/json".to_owned(),
+            description: None,
             schema: None,
         };
         let operation = operation_with("/pets", vec![], vec![], Some(spec));
@@ -349,6 +356,7 @@ mod tests {
         let spec = BodySpec {
             required: false,
             content_type: String::new(),
+            description: None,
             schema: None,
         };
         let operation = operation_with("/pets", vec![], vec![], Some(spec));

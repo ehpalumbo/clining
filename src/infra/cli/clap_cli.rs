@@ -11,9 +11,8 @@ use crate::application::api_invocation::ApiInvocationService;
 use crate::application::api_model::ApiModelService;
 use crate::application::auth::auth_from_options;
 use crate::domain::errors::DomainError;
-use crate::domain::model::{
-    ApiInvocationRequest, ApiModel, ApiOperation, ApiOperationGroup, BodySpec, Param, SchemaSpec,
-};
+use crate::domain::model::{ApiInvocationRequest, ApiModel, ApiOperation, ApiOperationGroup};
+use crate::infra::cli::help::{command_after_help, param_help_text};
 
 /// Builds the full CLI command tree: the `install` subcommand plus, when a
 /// model is provided, the installed API as a nested subcommand tree. Without a
@@ -123,13 +122,16 @@ fn api_command(model: &ApiModel) -> Command {
             if let Some(summary) = &operation.summary {
                 command_cmd = command_cmd.about(summary);
             }
+            if let Some(long_about) = operation_long_about(operation) {
+                command_cmd = command_cmd.long_about(long_about);
+            }
             for param in &operation.path_params {
                 command_cmd = command_cmd.arg(
                     Arg::new(param.canonical_name.clone())
                         .long(param.canonical_name.clone())
                         .value_name(param.name.clone())
                         .required(true)
-                        .help(param_help_text(param)),
+                        .help(param_help_text(model, param)),
                 );
             }
             for param in &operation.query_params {
@@ -138,18 +140,32 @@ fn api_command(model: &ApiModel) -> Command {
                     .value_name(param.name.clone())
                     .action(ArgAction::Append)
                     .num_args(1..)
-                    .help(param_help_text(param));
+                    .help(param_help_text(model, param));
                 if param.required {
                     arg = arg.required(true);
                 }
                 command_cmd = command_cmd.arg(arg);
             }
-            command_cmd = command_cmd.after_help(command_footer(model, operation));
+            command_cmd = command_cmd.after_long_help(command_after_help(model, operation));
             group_cmd = group_cmd.subcommand(command_cmd);
         }
         api = api.subcommand(group_cmd);
     }
     api
+}
+
+/// Long help for an operation command: the summary followed by the operation
+/// description when the spec provides one. The summary alone stays on `about`
+/// so `-h` and group listings keep their compact form.
+fn operation_long_about(operation: &ApiOperation) -> Option<String> {
+    let description = operation.description.as_deref()?.trim();
+    if description.is_empty() {
+        return None;
+    }
+    match &operation.summary {
+        Some(summary) => Some(format!("{summary}\n\n{description}")),
+        None => Some(description.to_owned()),
+    }
 }
 
 /// Help text for a group subcommand: the tag description when present, else a
@@ -158,147 +174,6 @@ fn group_about(group: &ApiOperationGroup) -> String {
     match &group.description {
         Some(description) => description.clone(),
         None => format!("{} commands", group.operations.len()),
-    }
-}
-
-/// Help text for a parameter argument: its description plus a required marker.
-fn param_help_text(param: &Param) -> String {
-    let mut text = param.description.clone().unwrap_or_default();
-    if param.required {
-        if !text.is_empty() {
-            text.push(' ');
-        }
-        text.push_str("[required]");
-    }
-    text
-}
-
-/// Footer shown under a command's `--help`: the request line and, when the
-/// operation declares a body, its content type, requiredness, and a
-/// fully-resolved JSON-schema tree.
-fn command_footer(model: &ApiModel, command: &ApiOperation) -> String {
-    let mut text = format!("Request: {} {}", command.method.as_str(), command.path);
-    if let Some(body) = &command.request_body {
-        text.push_str(&format!(
-            "\nBody: {} ({})",
-            body.content_type,
-            body_requiredness(body)
-        ));
-        text.push_str(&format!(
-            ", schema: {}\n",
-            render_body_schema(model, &body.schema)
-        ));
-    }
-    text
-}
-
-fn body_requiredness(body: &BodySpec) -> &'static str {
-    if body.required {
-        "required"
-    } else {
-        "optional"
-    }
-}
-
-/// Renders the operation's request body schema as compact JSON, fully
-/// expanding registry refs. `None` renders as the literal `unknown`.
-fn render_body_schema(model: &ApiModel, schema: &Option<SchemaSpec>) -> String {
-    match schema {
-        Some(spec) => serde_json::to_string(&render_schema(spec, model, &mut Vec::new()))
-            .unwrap_or_else(|_| "{}".to_owned()),
-        None => "unknown".to_owned(),
-    }
-}
-
-/// Renders a `SchemaSpec` as a JSON-schema value, expanding registry refs
-/// recursively. `seen` is a path stack used to terminate cycles: a ref already
-/// on the stack (or absent from the registry) renders as a `$ref` marker.
-fn render_schema(spec: &SchemaSpec, model: &ApiModel, seen: &mut Vec<String>) -> serde_json::Value {
-    match spec {
-        SchemaSpec::Ref { ref_id } => {
-            if seen.iter().any(|id| id == ref_id) {
-                return serde_json::json!({ "$ref": format!("#/components/schemas/{ref_id}") });
-            }
-            match model.schema_by_ref_id(ref_id) {
-                Some(target) => {
-                    seen.push(ref_id.clone());
-                    let rendered = render_schema(target, model, seen);
-                    seen.pop();
-                    rendered
-                }
-                None => serde_json::json!({ "$ref": format!("#/components/schemas/{ref_id}") }),
-            }
-        }
-        SchemaSpec::Object {
-            properties,
-            extra_json,
-        } => {
-            let mut map = extra_json
-                .as_deref()
-                .and_then(|raw| serde_json::from_str(raw).ok())
-                .and_then(|v| match v {
-                    serde_json::Value::Object(m) => Some(m),
-                    _ => None,
-                })
-                .unwrap_or_default();
-            if !map.contains_key("type") {
-                map.insert("type".to_owned(), serde_json::json!("object"));
-            }
-            if !properties.is_empty() {
-                let mut props = serde_json::Map::new();
-                for (name, prop) in properties {
-                    props.insert(name.clone(), render_schema(prop, model, seen));
-                }
-                map.insert("properties".to_owned(), serde_json::Value::Object(props));
-            }
-            serde_json::Value::Object(map)
-        }
-        SchemaSpec::Array { items, extra_json } => {
-            let mut map = extra_json
-                .as_deref()
-                .and_then(|raw| serde_json::from_str(raw).ok())
-                .and_then(|v| match v {
-                    serde_json::Value::Object(m) => Some(m),
-                    _ => None,
-                })
-                .unwrap_or_default();
-            if !map.contains_key("type") {
-                map.insert("type".to_owned(), serde_json::json!("array"));
-            }
-            if let Some(items) = items {
-                map.insert("items".to_owned(), render_schema(items, model, seen));
-            }
-            serde_json::Value::Object(map)
-        }
-        SchemaSpec::Primitive { raw_json } => {
-            serde_json::from_str(raw_json).unwrap_or_else(|_| serde_json::json!({}))
-        }
-        SchemaSpec::Composite {
-            composite_kind,
-            schemas,
-            extra_json,
-        } => {
-            let mut map = extra_json
-                .as_deref()
-                .and_then(|raw| serde_json::from_str(raw).ok())
-                .and_then(|v| match v {
-                    serde_json::Value::Object(m) => Some(m),
-                    _ => None,
-                })
-                .unwrap_or_default();
-            let rendered: Vec<serde_json::Value> = schemas
-                .iter()
-                .map(|schema| render_schema(schema, model, seen))
-                .collect();
-            map.insert(
-                composite_kind.keyword().to_owned(),
-                serde_json::Value::Array(rendered),
-            );
-            serde_json::Value::Object(map)
-        }
-        SchemaSpec::Unknown { raw_json } => {
-            serde_json::from_str(raw_json).unwrap_or_else(|_| serde_json::json!({}))
-        }
     }
 }
 
@@ -634,6 +509,19 @@ mod tests {
         SchemaSpec,
     };
 
+    fn command_help(model: &ApiModel, group: &str, name: &str) -> String {
+        build_cli_command(Some(model))
+            .find_subcommand(group)
+            .unwrap()
+            .find_subcommand(group)
+            .unwrap()
+            .find_subcommand(name)
+            .unwrap()
+            .clone()
+            .render_long_help()
+            .to_string()
+    }
+
     fn sample_model() -> ApiModel {
         ApiModel {
             name: "pets".to_owned(),
@@ -647,6 +535,7 @@ mod tests {
                 operations: vec![ApiOperation {
                     name: "get-pet".to_owned(),
                     summary: Some("Get a pet".to_owned()),
+                    description: Some("Returns the requested pet by id.".to_owned()),
                     method: HttpMethod::Get,
                     path: "/pets/{petId}".to_owned(),
                     path_params: vec![Param {
@@ -654,16 +543,19 @@ mod tests {
                         canonical_name: "pet-id".to_owned(),
                         required: true,
                         description: Some("Numeric id of the pet".to_owned()),
+                        schema: None,
                     }],
                     query_params: vec![Param {
                         name: "status".to_owned(),
                         canonical_name: "status".to_owned(),
                         required: false,
                         description: None,
+                        schema: None,
                     }],
                     request_body: Some(BodySpec {
                         required: true,
                         content_type: "application/json".to_owned(),
+                        description: None,
                         schema: Some(SchemaSpec::Object {
                             properties: BTreeMap::new(),
                             extra_json: None,
@@ -709,6 +601,7 @@ mod tests {
                 operations: vec![ApiOperation {
                     name: "place-order".to_owned(),
                     summary: None,
+                    description: None,
                     method: HttpMethod::Post,
                     path: "/store/orders".to_owned(),
                     path_params: vec![],
@@ -716,13 +609,15 @@ mod tests {
                     request_body: Some(BodySpec {
                         required: true,
                         content_type: "application/json".to_owned(),
+                        description: None,
                         schema: Some(SchemaSpec::Ref {
                             ref_id: "Order".to_owned(),
                         }),
                     }),
                     responses: vec![ResponseSpec {
                         status_code: "200".to_owned(),
-                        content_type: "application/json".to_owned(),
+                        description: None,
+                        content_type: Some("application/json".to_owned()),
                         schema: Some(SchemaSpec::Ref {
                             ref_id: "Order".to_owned(),
                         }),
@@ -981,6 +876,120 @@ mod tests {
 
     #[test]
     fn command_help_shows_params_and_body_schema() {
+        let help = command_help(&sample_model(), "pets", "get-pet");
+        assert!(help.contains("--pet-id"), "{help}");
+        assert!(help.contains("(required)"), "{help}");
+        assert!(help.contains("Request: GET /pets/{petId}"), "{help}");
+        assert!(help.contains("Request body"), "{help}");
+        assert!(help.contains("application/json"), "{help}");
+        assert!(
+            help.contains("application/json (required)\n    object"),
+            "{help}"
+        );
+        assert!(help.contains("Responses"), "{help}");
+    }
+
+    #[test]
+    fn command_long_help_places_description_after_summary() {
+        let help = command_help(&sample_model(), "pets", "get-pet");
+        let summary = help.find("Get a pet").expect("summary is rendered");
+        let description = help
+            .find("Returns the requested pet by id.")
+            .expect("description is rendered");
+        assert!(summary < description, "{help}");
+    }
+
+    #[test]
+    fn operation_long_about_combines_summary_and_description() {
+        let mut operation = sample_model().operation_groups[0].operations[0].clone();
+        assert_eq!(
+            operation_long_about(&operation).as_deref(),
+            Some("Get a pet\n\nReturns the requested pet by id.")
+        );
+
+        operation.summary = None;
+        assert_eq!(
+            operation_long_about(&operation).as_deref(),
+            Some("Returns the requested pet by id.")
+        );
+
+        operation.description = None;
+        assert_eq!(operation_long_about(&operation), None);
+    }
+
+    #[test]
+    fn group_help_keeps_summary_only() {
+        let cmd = build_cli_command(Some(&sample_model()));
+        let mut group = cmd
+            .find_subcommand("pets")
+            .unwrap()
+            .find_subcommand("pets")
+            .unwrap()
+            .clone();
+        let help = group.render_help().to_string();
+        assert!(help.contains("Get a pet"), "{help}");
+        assert!(!help.contains("Returns the requested pet by id."), "{help}");
+    }
+
+    #[test]
+    fn param_help_text_marks_required() {
+        let model = sample_model();
+        let required = Param {
+            name: "petId".to_owned(),
+            canonical_name: "pet-id".to_owned(),
+            required: true,
+            description: Some("Numeric id".to_owned()),
+            schema: None,
+        };
+        let optional = Param {
+            name: "status".to_owned(),
+            canonical_name: "status".to_owned(),
+            required: false,
+            description: None,
+            schema: None,
+        };
+        assert_eq!(param_help_text(&model, &required), "Numeric id (required)");
+        assert_eq!(param_help_text(&model, &optional), "(optional)");
+    }
+
+    #[test]
+    fn command_help_indents_structured_param_walkthrough() {
+        let mut model = sample_model();
+        model.schema_registry.insert(
+            "Filter".to_owned(),
+            SchemaSpec::Object {
+                properties: BTreeMap::from([(
+                    "kind".to_owned(),
+                    SchemaSpec::Primitive {
+                        raw_json: r#"{"enum":["a","b"],"type":"string"}"#.to_owned(),
+                    },
+                )]),
+                extra_json: Some(r#"{"required":["kind"]}"#.to_owned()),
+            },
+        );
+        model.operation_groups[0].operations[0].query_params[0].schema = Some(SchemaSpec::Ref {
+            ref_id: "Filter".to_owned(),
+        });
+
+        let cmd = build_cli_command(Some(&model));
+        let mut command = cmd
+            .find_subcommand("pets")
+            .unwrap()
+            .find_subcommand("pets")
+            .unwrap()
+            .find_subcommand("get-pet")
+            .unwrap()
+            .clone();
+        let help = command.render_help().to_string();
+        assert!(help.contains("type: Filter (object)"), "{help}");
+        assert!(
+            help.contains(r#"kind: string (required) (enum: "a", "b")"#),
+            "{help}"
+        );
+    }
+
+    #[test]
+    fn command_footer_includes_request_and_body() {
         let cmd = build_cli_command(Some(&sample_model()));
         let mut command = cmd
             .find_subcommand("pets")
@@ -990,51 +999,19 @@ mod tests {
             .find_subcommand("get-pet")
             .unwrap()
             .clone();
-        command.clone().debug_assert();
-        let help = command.render_help().to_string();
-        assert!(help.contains("--pet-id"), "{help}");
-        assert!(help.contains("[required]"), "{help}");
-        assert!(help.contains("Request: GET /pets/{petId}"), "{help}");
-        assert!(help.contains("application/json"), "{help}");
-        assert!(help.contains("required"), "{help}");
-        assert!(help.contains("schema: {\"type\":\"object\"}"), "{help}");
-    }
-
-    #[test]
-    fn param_help_text_marks_required() {
-        let required = Param {
-            name: "petId".to_owned(),
-            canonical_name: "pet-id".to_owned(),
-            required: true,
-            description: Some("Numeric id".to_owned()),
-        };
-        assert_eq!(param_help_text(&required), "Numeric id [required]");
-        let optional = Param {
-            name: "status".to_owned(),
-            canonical_name: "status".to_owned(),
-            required: false,
-            description: None,
-        };
-        assert_eq!(param_help_text(&optional), "");
-    }
-
-    #[test]
-    fn command_footer_includes_request_and_body() {
-        let cmd = build_cli_command(Some(&sample_model()));
-        let command = cmd
-            .find_subcommand("pets")
-            .unwrap()
-            .find_subcommand("pets")
-            .unwrap()
-            .find_subcommand("get-pet")
-            .unwrap()
-            .clone();
-        let footer = command.get_after_help().map(|s| s.to_string());
+        let footer = command.get_after_long_help().map(|s| s.to_string());
         let footer = footer.unwrap();
         assert!(footer.contains("Request: GET /pets/{petId}"), "{footer}");
         assert!(
-            footer.contains("Body: application/json (required), schema: {\"type\":\"object\"}"),
+            footer.contains("Request body:\n  application/json (required)\n    object"),
             "{footer}"
+        );
+
+        assert!(command.get_after_help().is_none());
+        let short_help = command.render_help().to_string();
+        assert!(
+            !short_help.contains("Request: GET /pets/{petId}"),
+            "{short_help}"
         );
     }
 
@@ -1049,60 +1026,16 @@ mod tests {
             .find_subcommand("place-order")
             .unwrap()
             .clone();
-        let footer = command.get_after_help().map(|s| s.to_string());
+        let footer = command.get_after_long_help().map(|s| s.to_string());
         let footer = footer.unwrap();
-        assert!(footer.contains("schema: {\"properties\":"), "{footer}");
-        assert!(footer.contains("\"description\":\"Order id\""), "{footer}");
-        assert!(footer.contains("\"minimum\":1"), "{footer}");
-        assert!(footer.contains("\"required\":[\"id\"]"), "{footer}");
-        assert!(!footer.contains("\"$ref\""), "{footer}");
-    }
-
-    #[test]
-    fn cyclic_ref_renders_marker_at_cycle_point() {
-        let model = ApiModel {
-            name: "pets".to_owned(),
-            base_url: "https://example.com".to_owned(),
-            version: ModelVersion::V1,
-            auth: None,
-            schema_registry: BTreeMap::from([(
-                "Node".to_owned(),
-                SchemaSpec::Object {
-                    properties: BTreeMap::from([(
-                        "next".to_owned(),
-                        SchemaSpec::Ref {
-                            ref_id: "Node".to_owned(),
-                        },
-                    )]),
-                    extra_json: None,
-                },
-            )]),
-            operation_groups: vec![],
-        };
-        let rendered = render_body_schema(
-            &model,
-            &Some(SchemaSpec::Ref {
-                ref_id: "Node".to_owned(),
-            }),
+        assert!(footer.contains("Order (object) {"), "{footer}");
+        assert!(
+            footer.contains("id: integer (required): Order id (minimum: 1)"),
+            "{footer}"
         );
-        let value: serde_json::Value = serde_json::from_str(&rendered).unwrap();
-        assert_eq!(value["type"], "object");
-        assert_eq!(
-            value["properties"]["next"]["$ref"],
-            "#/components/schemas/Node"
-        );
-    }
-
-    #[test]
-    fn unknown_schema_renders_wrapped_json() {
-        let model = sample_model();
-        let rendered = render_body_schema(
-            &model,
-            &Some(SchemaSpec::Unknown {
-                raw_json: r#"{"x-extension":true}"#.to_owned(),
-            }),
-        );
-        assert_eq!(rendered, r#"{"x-extension":true}"#);
+        assert!(footer.contains("Responses:"), "{footer}");
+        assert!(footer.contains("200 application/json"), "{footer}");
+        assert!(!footer.contains("$ref"), "{footer}");
     }
 
     #[test]

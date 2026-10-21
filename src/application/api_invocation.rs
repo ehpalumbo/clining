@@ -70,6 +70,7 @@ mod tests {
                 operations: vec![ApiOperation {
                     name: "get-pet".to_owned(),
                     summary: None,
+                    description: None,
                     method: HttpMethod::Get,
                     path: "/pets/{petId}".to_owned(),
                     path_params: vec![Param {
@@ -77,12 +78,14 @@ mod tests {
                         canonical_name: "pet-id".to_owned(),
                         required: true,
                         description: None,
+                        schema: None,
                     }],
                     query_params: vec![Param {
                         name: "status".to_owned(),
                         canonical_name: "status".to_owned(),
                         required: false,
                         description: None,
+                        schema: None,
                     }],
                     request_body: None,
                     responses: vec![],

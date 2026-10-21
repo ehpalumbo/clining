@@ -3,6 +3,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use serde::{Deserialize, Serialize};
+use serde_with::skip_serializing_none;
 
 use crate::domain::errors::DomainError;
 
@@ -13,14 +14,13 @@ pub enum ModelVersion {
 }
 
 /// The persisted representation of an installed API.
+#[skip_serializing_none]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ApiModel {
     pub name: String,
     pub base_url: String,
     pub version: ModelVersion,
-    #[serde(default)]
     pub schema_registry: BTreeMap<String, SchemaSpec>,
-    #[serde(default)]
     pub auth: Option<AuthConfig>,
     pub operation_groups: Vec<ApiOperationGroup>,
 }
@@ -44,51 +44,60 @@ impl ApiModel {
 }
 
 /// A named group of operations derived from an OpenAPI tag.
+#[skip_serializing_none]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ApiOperationGroup {
     pub name: String,
-    #[serde(default)]
     pub description: Option<String>,
     pub operations: Vec<ApiOperation>,
 }
 
 /// A single API operation (endpoint) exposed as a CLI command.
+#[skip_serializing_none]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ApiOperation {
     pub name: String,
     pub summary: Option<String>,
+    pub description: Option<String>,
     pub method: HttpMethod,
     pub path: String,
     pub path_params: Vec<Param>,
     pub query_params: Vec<Param>,
     pub request_body: Option<BodySpec>,
-    #[serde(default)]
     pub responses: Vec<ResponseSpec>,
 }
 
 /// A path or query parameter, keeping both the original and CLI names.
+#[skip_serializing_none]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Param {
     pub name: String,
     pub canonical_name: String,
     pub required: bool,
-    #[serde(default)]
     pub description: Option<String>,
+    /// Value shape from the spec, captured for `--help` when present.
+    pub schema: Option<SchemaSpec>,
 }
 
 /// Request body metadata; the typed schema is stored for help display only.
+#[skip_serializing_none]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BodySpec {
     pub required: bool,
     pub content_type: String,
+    pub description: Option<String>,
     pub schema: Option<SchemaSpec>,
 }
 
 /// An operation response body captured by status code and content type.
+#[skip_serializing_none]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResponseSpec {
     pub status_code: String,
-    pub content_type: String,
+    pub description: Option<String>,
+    /// Body content type, or `None` when the response declares no body (for
+    /// example `204`).
+    pub content_type: Option<String>,
     pub schema: Option<SchemaSpec>,
 }
 
@@ -117,6 +126,7 @@ impl CompositeKind {
 /// Leaf nodes preserve their complete `raw_json` payload, while compound nodes
 /// store child schemas structurally and preserve only unmodeled metadata in
 /// `extra_json` to avoid duplication.
+#[skip_serializing_none]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SchemaSpec {
@@ -126,13 +136,10 @@ pub enum SchemaSpec {
     Object {
         #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
         properties: BTreeMap<String, SchemaSpec>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
         extra_json: Option<String>,
     },
     Array {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
         items: Option<Box<SchemaSpec>>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
         extra_json: Option<String>,
     },
     Primitive {
@@ -142,7 +149,6 @@ pub enum SchemaSpec {
         composite_kind: CompositeKind,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         schemas: Vec<SchemaSpec>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
         extra_json: Option<String>,
     },
     Unknown {

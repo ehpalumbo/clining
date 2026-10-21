@@ -53,6 +53,7 @@ pub struct Operation {
     #[serde(rename = "operationId")]
     pub operation_id: Option<String>,
     pub summary: Option<String>,
+    pub description: Option<String>,
     pub tags: Option<Vec<String>>,
     pub parameters: Option<Vec<Parameter>>,
     #[serde(rename = "requestBody")]
@@ -60,9 +61,10 @@ pub struct Operation {
     pub responses: Option<BTreeMap<String, Response>>,
 }
 
-/// A response object; only body content is captured.
+/// A response object; only the description and body content are captured.
 #[derive(Debug, Deserialize)]
 pub struct Response {
+    pub description: Option<String>,
     pub content: Option<BTreeMap<String, MediaType>>,
 }
 
@@ -73,11 +75,14 @@ pub struct Parameter {
     pub location: String,
     pub required: Option<bool>,
     pub description: Option<String>,
+    /// Inline or local-ref schema describing the parameter value.
+    pub schema: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct RequestBody {
     pub required: Option<bool>,
+    pub description: Option<String>,
     pub content: BTreeMap<String, MediaType>,
 }
 

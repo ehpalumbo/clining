@@ -194,6 +194,7 @@ impl Parser {
         ApiOperation {
             name,
             summary: op.summary.clone(),
+            description: op.description.clone(),
             method,
             path: path.to_owned(),
             path_params,
@@ -231,6 +232,7 @@ impl Parser {
             canonical_name: cli_name(&p.name),
             required: p.required.unwrap_or(false),
             description: p.description.clone(),
+            schema: p.schema.as_ref().map(Self::parse_schema),
         }
     }
 
@@ -243,20 +245,34 @@ impl Parser {
         BodySpec {
             required: rb.required.unwrap_or(false),
             content_type,
+            description: rb.description.clone(),
             schema,
         }
     }
 
     /// Flattens an operation's responses into one `ResponseSpec` per
-    /// (status code, content type).
+    /// (status code, content type). A response with no body content keeps a
+    /// single entry with no content type so `--help` can list the status code
+    /// (for example `204`).
     fn to_response_specs(responses: &BTreeMap<String, Response>) -> Vec<ResponseSpec> {
         let mut out = Vec::new();
         for (status_code, response) in responses {
+            let mut has_content = false;
             for (content_type, media) in response.content.iter().flatten() {
+                has_content = true;
                 out.push(ResponseSpec {
                     status_code: status_code.clone(),
-                    content_type: content_type.clone(),
+                    description: response.description.clone(),
+                    content_type: Some(content_type.clone()),
                     schema: media.schema.as_ref().map(Self::parse_schema),
+                });
+            }
+            if !has_content {
+                out.push(ResponseSpec {
+                    status_code: status_code.clone(),
+                    description: response.description.clone(),
+                    content_type: None,
+                    schema: None,
                 });
             }
         }
@@ -384,6 +400,14 @@ impl Parser {
     }
 }
 
+/// Parses a raw JSON schema value into the typed `SchemaSpec`.
+///
+/// Used by the help renderer to decode sibling `properties` that the parser
+/// preserves in a composite node's `extra_json`.
+pub(crate) fn parse_schema_value(value: &serde_json::Value) -> SchemaSpec {
+    Parser::parse_schema(value)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -412,12 +436,13 @@ mod tests {
         "paths": {
             "/pets": {
                 "parameters": [
-                    { "name": "sort", "in": "query", "required": false },
-                    { "name": "limit", "in": "query", "required": true }
+                    { "name": "sort", "in": "query", "required": false, "schema": { "type": "string", "enum": ["asc", "desc"] } },
+                    { "name": "limit", "in": "query", "required": true, "schema": { "type": "integer", "minimum": 1 } }
                 ],
                 "get": {
                     "operationId": "listPets",
                     "summary": "List all pets",
+                    "description": "Returns all pets, optionally filtered",
                     "tags": ["pets"],
                     "parameters": [
                         { "name": "limit", "in": "query", "required": false }
@@ -428,12 +453,14 @@ mod tests {
                     "tags": ["pets"],
                     "requestBody": {
                         "required": true,
+                        "description": "Pet to add to the store",
                         "content": {
                             "application/json": { "schema": { "type": "object" } }
                         }
                     },
                     "responses": {
                         "200": {
+                            "description": "The created pet",
                             "content": {
                                 "application/json": { "schema": { "type": "object" } }
                             }
@@ -445,7 +472,7 @@ mod tests {
                 "get": {
                     "summary": "Get a pet by id",
                     "parameters": [
-                        { "name": "petId", "in": "path", "required": true, "description": "The numeric pet id" },
+                        { "name": "petId", "in": "path", "required": true, "description": "The numeric pet id", "schema": { "type": "integer", "minimum": 1 } },
                         { "name": "X-API-Key", "in": "header" }
                     ]
                 }
@@ -510,6 +537,10 @@ mod tests {
 
         let list = &pets.operations[0];
         assert_eq!(list.method, HttpMethod::Get);
+        assert_eq!(
+            list.description.as_deref(),
+            Some("Returns all pets, optionally filtered")
+        );
         assert_eq!(list.path, "/pets");
         assert!(list.path_params.is_empty());
         let query_names: Vec<&str> = list.query_params.iter().map(|p| p.name.as_str()).collect();
@@ -524,6 +555,19 @@ mod tests {
             "operation-level param overrides path-level"
         );
         assert_eq!(limit.canonical_name, "limit");
+        assert!(
+            limit.schema.is_none(),
+            "operation-level override replaces the whole parameter"
+        );
+
+        let sort = list.query_params.iter().find(|p| p.name == "sort").unwrap();
+        match sort.schema.as_ref().unwrap() {
+            SchemaSpec::Primitive { raw_json } => {
+                assert!(raw_json.contains(r#""type":"string""#), "{raw_json}");
+                assert!(raw_json.contains(r#""enum":["asc","desc"]"#), "{raw_json}");
+            }
+            other => panic!("expected primitive, got {other:?}"),
+        }
 
         let create = &pets.operations[1];
         let query_names: Vec<&str> = create
@@ -544,6 +588,7 @@ mod tests {
         let body = create.request_body.as_ref().unwrap();
         assert!(body.required);
         assert_eq!(body.content_type, "application/json");
+        assert_eq!(body.description.as_deref(), Some("Pet to add to the store"));
         assert_eq!(
             body.schema,
             Some(SchemaSpec::Object {
@@ -571,6 +616,13 @@ mod tests {
         assert_eq!(pet_id.canonical_name, "pet-id");
         assert!(pet_id.required);
         assert_eq!(pet_id.description.as_deref(), Some("The numeric pet id"));
+        match pet_id.schema.as_ref().unwrap() {
+            SchemaSpec::Primitive { raw_json } => {
+                assert!(raw_json.contains(r#""type":"integer""#), "{raw_json}");
+                assert!(raw_json.contains(r#""minimum":1"#), "{raw_json}");
+            }
+            other => panic!("expected primitive, got {other:?}"),
+        }
         assert!(get.request_body.is_none());
     }
 
@@ -713,7 +765,8 @@ mod tests {
         assert_eq!(create.responses.len(), 1);
         let resp = &create.responses[0];
         assert_eq!(resp.status_code, "200");
-        assert_eq!(resp.content_type, "application/json");
+        assert_eq!(resp.description.as_deref(), Some("The created pet"));
+        assert_eq!(resp.content_type.as_deref(), Some("application/json"));
         assert_eq!(
             resp.schema,
             Some(SchemaSpec::Object {
@@ -734,13 +787,42 @@ mod tests {
             .unwrap();
         let resp = &place_order.responses[0];
         assert_eq!(resp.status_code, "200");
-        assert_eq!(resp.content_type, "application/json");
+        assert_eq!(resp.content_type.as_deref(), Some("application/json"));
         assert_eq!(
             resp.schema,
             Some(SchemaSpec::Ref {
                 ref_id: "Order".to_owned()
             })
         );
+    }
+
+    #[test]
+    fn captures_contentless_responses_as_status_only_specs() {
+        let spec = r#"{
+            "openapi": "3.0.0",
+            "paths": {
+                "/ping": {
+                    "get": {
+                        "responses": {
+                            "204": { "description": "No content" },
+                            "200": { "content": { "application/json": { "schema": { "type": "object" } } } }
+                        }
+                    }
+                }
+            }
+        }"#;
+        let model = Parser.parse(spec.as_bytes()).unwrap();
+        let responses = &model.operation_groups[0].operations[0].responses;
+        let no_content = responses
+            .iter()
+            .find(|r| r.status_code == "204")
+            .expect("204 response is captured");
+        assert_eq!(no_content.description.as_deref(), Some("No content"));
+        assert_eq!(no_content.content_type, None);
+        assert!(no_content.schema.is_none());
+        assert!(responses.iter().any(
+            |r| r.status_code == "200" && r.content_type.as_deref() == Some("application/json")
+        ));
     }
 
     #[test]

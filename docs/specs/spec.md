@@ -30,7 +30,7 @@ Platform target: **Linux only**, implemented in **Rust**, organized with **onion
 | `clining <name> <group> <command> [--param value]... [< body.json]` | Invoke an endpoint. |
 | `clining <name> --help` | List command groups for the API. |
 | `clining <name> <group> --help` | List commands in the group. |
-| `clining <name> <group> <command> --help` | Show parameters and the expected request body. |
+| `clining <name> <group> <command> --help` | Show full input/output documentation: request line, parameter shapes, request body walkthrough, and response schemas. |
 
 ## Functional Requirements
 
@@ -50,7 +50,7 @@ Platform target: **Linux only**, implemented in **Rust**, organized with **onion
 - FR-2.3 Fallback command name = HTTP method + path segments (skipping `{path variables}`) joined by `-` (e.g. `GET /pets/{petId}` → `get-pets`).
 - FR-2.4 Duplicate command names within a group are disambiguated with numeric suffixes (`-2`, `-3`, …).
 - FR-2.5 Parameter CLI names are **kebab-cased** for the command line (e.g. `petStatus` → `--pet-status`); the original name is retained in the model so path/query substitution stays correct.
-- FR-2.6 The stored model captures base URL, groups, commands, HTTP method, path template, path/query parameters (original name, CLI name, required flag), and the request body spec (content type, required flag, raw JSON schema).
+- FR-2.6 The stored model captures base URL, groups, commands, HTTP method, path template, path/query parameters (original name, CLI name, required flag, and value schema where the spec provides one), the request body spec (content type, required flag, typed schema), and response specs (status code, content type, typed schema).
 
 ### FR-3 Invocation
 
@@ -64,8 +64,12 @@ Platform target: **Linux only**, implemented in **Rust**, organized with **onion
 
 ### FR-4 Discovery
 
-- FR-4.1 `--help` renders at every level: API (groups), group (commands), command (parameters + body schema hint).
-- FR-4.2 Help shows command summaries, parameter CLI names with required flags, and the request body content type, requiredness, and a schema summary.
+- FR-4.1 `--help` renders at every level: API (groups), group (commands), and command (complete input/output documentation).
+- FR-4.2 Command help shows the summary, the operation description when the spec provides one, the full request line (`METHOD path`), and every parameter's CLI flag, required/optional status, description, and value shape where the spec provides one (type, enum values, examples, and constraints).
+- FR-4.3 Command help renders the request body as a field-by-field walkthrough: content type, required/optional status, then each field's name, type, required flag, description, enum, and examples, including nested objects, arrays, and composite schemas. Local `$ref`s are shown by their resolved component name and shape, never as raw references or an unlabeled JSON blob; recursive schemas are marked at the cycle point.
+- FR-4.4 Command help documents responses per status code and content type, with the response description when the spec provides one and the same schema walkthrough so an agent can parse or validate the result. Responses without a body still list their status code.
+- FR-4.5 Help is read-only: rendering it never resolves auth, reads stdin, or sends an HTTP request.
+- FR-4.6 Command help is the single documentation surface; there is no separate long-form docs mode.
 
 ### FR-5 Local Storage
 
