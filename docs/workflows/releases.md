@@ -50,7 +50,7 @@ resolve version ──> refuse existing tag/release ──> make check ──> m
 
 - `make check` is the same gate as CI: formatting, clippy with `-D warnings`, and all tests.
 - `make build` produces the release binary.
-- `make dist` packages the binary. The workflow reuses the Makefile target rather than duplicating the layout, so local verification matches CI.
+- `make dist` packages the binary. The workflow reuses the Makefile target rather than duplicating the layout, so local verification matches CI. The target reads the version through `cargo metadata`, so local runs also need `jq`.
 
 A failure in any stage leaves no Release behind. On manual dispatch it also leaves no tag; on a tag push the tag remains, so delete and recreate it deliberately if you need to retry (see Failure and recovery).
 
