@@ -155,6 +155,7 @@ mod tests {
         ApiOperation {
             name: "test".to_owned(),
             summary: None,
+            description: None,
             method: HttpMethod::Post,
             path: path.to_owned(),
             path_params,

@@ -58,6 +58,7 @@ pub struct ApiOperationGroup {
 pub struct ApiOperation {
     pub name: String,
     pub summary: Option<String>,
+    pub description: Option<String>,
     pub method: HttpMethod,
     pub path: String,
     pub path_params: Vec<Param>,
@@ -92,6 +93,7 @@ pub struct BodySpec {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResponseSpec {
     pub status_code: String,
+    pub description: Option<String>,
     /// Body content type, or `None` when the response declares no body (for
     /// example `204`).
     pub content_type: Option<String>,

@@ -194,6 +194,7 @@ impl Parser {
         ApiOperation {
             name,
             summary: op.summary.clone(),
+            description: op.description.clone(),
             method,
             path: path.to_owned(),
             path_params,
@@ -260,6 +261,7 @@ impl Parser {
                 has_content = true;
                 out.push(ResponseSpec {
                     status_code: status_code.clone(),
+                    description: response.description.clone(),
                     content_type: Some(content_type.clone()),
                     schema: media.schema.as_ref().map(Self::parse_schema),
                 });
@@ -267,6 +269,7 @@ impl Parser {
             if !has_content {
                 out.push(ResponseSpec {
                     status_code: status_code.clone(),
+                    description: response.description.clone(),
                     content_type: None,
                     schema: None,
                 });
@@ -438,6 +441,7 @@ mod tests {
                 "get": {
                     "operationId": "listPets",
                     "summary": "List all pets",
+                    "description": "Returns all pets, optionally filtered",
                     "tags": ["pets"],
                     "parameters": [
                         { "name": "limit", "in": "query", "required": false }
@@ -454,6 +458,7 @@ mod tests {
                     },
                     "responses": {
                         "200": {
+                            "description": "The created pet",
                             "content": {
                                 "application/json": { "schema": { "type": "object" } }
                             }
@@ -530,6 +535,10 @@ mod tests {
 
         let list = &pets.operations[0];
         assert_eq!(list.method, HttpMethod::Get);
+        assert_eq!(
+            list.description.as_deref(),
+            Some("Returns all pets, optionally filtered")
+        );
         assert_eq!(list.path, "/pets");
         assert!(list.path_params.is_empty());
         let query_names: Vec<&str> = list.query_params.iter().map(|p| p.name.as_str()).collect();
@@ -753,6 +762,7 @@ mod tests {
         assert_eq!(create.responses.len(), 1);
         let resp = &create.responses[0];
         assert_eq!(resp.status_code, "200");
+        assert_eq!(resp.description.as_deref(), Some("The created pet"));
         assert_eq!(resp.content_type.as_deref(), Some("application/json"));
         assert_eq!(
             resp.schema,
@@ -804,6 +814,7 @@ mod tests {
             .iter()
             .find(|r| r.status_code == "204")
             .expect("204 response is captured");
+        assert_eq!(no_content.description.as_deref(), Some("No content"));
         assert_eq!(no_content.content_type, None);
         assert!(no_content.schema.is_none());
         assert!(responses.iter().any(

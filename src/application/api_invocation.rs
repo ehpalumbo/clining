@@ -70,6 +70,7 @@ mod tests {
                 operations: vec![ApiOperation {
                     name: "get-pet".to_owned(),
                     summary: None,
+                    description: None,
                     method: HttpMethod::Get,
                     path: "/pets/{petId}".to_owned(),
                     path_params: vec![Param {

@@ -75,6 +75,10 @@ fn command_help_shows_summary_request_line_and_parameter_shapes() {
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("List pets"), "{stdout}");
+    assert!(
+        stdout.contains("Returns all pets, optionally filtered"),
+        "{stdout}"
+    );
     assert!(stdout.contains("Request: GET /pets"), "{stdout}");
     assert!(stdout.contains("--status"), "{stdout}");
     assert!(stdout.contains("Filter by status"), "{stdout}");
@@ -168,8 +172,14 @@ fn command_help_shows_resolved_reference_schema_and_responses() {
         "{stdout}"
     );
     assert!(stdout.contains("Responses"), "{stdout}");
-    assert!(stdout.contains("200 application/json"), "{stdout}");
-    assert!(stdout.contains("404 application/json"), "{stdout}");
+    assert!(
+        stdout.contains("200 application/json — The placed order"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("404 application/json — Pet not found"),
+        "{stdout}"
+    );
     assert!(stdout.contains("Error (object) {"), "{stdout}");
     assert!(
         stdout.contains("message: string (required): Human-readable error message"),
@@ -190,13 +200,19 @@ fn command_help_renders_array_response_schemas() {
         String::from_utf8_lossy(&out.stderr)
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(stdout.contains("200 application/json"), "{stdout}");
+    assert!(
+        stdout.contains("200 application/json — A list of pets"),
+        "{stdout}"
+    );
     assert!(stdout.contains("array<Pet> ["), "{stdout}");
     assert!(stdout.contains("Pet (object) {"), "{stdout}");
     assert!(!stdout.contains("items:"), "{stdout}");
     assert!(stdout.contains("tags: array<string>"), "{stdout}");
     assert!(stdout.contains("owner: Owner (object) {"), "{stdout}");
-    assert!(stdout.contains("400 application/json"), "{stdout}");
+    assert!(
+        stdout.contains("400 application/json — Invalid filter"),
+        "{stdout}"
+    );
     assert!(!stdout.contains("$ref"), "{stdout}");
 }
 
@@ -213,7 +229,7 @@ fn command_help_lists_contentless_response_status_codes() {
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("Responses"), "{stdout}");
-    assert!(stdout.contains("204"), "{stdout}");
+    assert!(stdout.contains("204 — Healthy"), "{stdout}");
     assert!(!stdout.contains("schema not documented"), "{stdout}");
 }
 

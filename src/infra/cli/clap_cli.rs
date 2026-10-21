@@ -505,6 +505,7 @@ mod tests {
                 operations: vec![ApiOperation {
                     name: "get-pet".to_owned(),
                     summary: Some("Get a pet".to_owned()),
+                    description: None,
                     method: HttpMethod::Get,
                     path: "/pets/{petId}".to_owned(),
                     path_params: vec![Param {
@@ -569,6 +570,7 @@ mod tests {
                 operations: vec![ApiOperation {
                     name: "place-order".to_owned(),
                     summary: None,
+                    description: None,
                     method: HttpMethod::Post,
                     path: "/store/orders".to_owned(),
                     path_params: vec![],
@@ -582,6 +584,7 @@ mod tests {
                     }),
                     responses: vec![ResponseSpec {
                         status_code: "200".to_owned(),
+                        description: None,
                         content_type: Some("application/json".to_owned()),
                         schema: Some(SchemaSpec::Ref {
                             ref_id: "Order".to_owned(),

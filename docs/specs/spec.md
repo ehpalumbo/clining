@@ -65,9 +65,9 @@ Platform target: **Linux only**, implemented in **Rust**, organized with **onion
 ### FR-4 Discovery
 
 - FR-4.1 `--help` renders at every level: API (groups), group (commands), and command (complete input/output documentation).
-- FR-4.2 Command help shows the summary, the full request line (`METHOD path`), and every parameter's CLI flag, required/optional status, description, and value shape where the spec provides one (type, enum values, examples, and constraints).
+- FR-4.2 Command help shows the summary, the operation description when the spec provides one, the full request line (`METHOD path`), and every parameter's CLI flag, required/optional status, description, and value shape where the spec provides one (type, enum values, examples, and constraints).
 - FR-4.3 Command help renders the request body as a field-by-field walkthrough: content type, required/optional status, then each field's name, type, required flag, description, enum, and examples, including nested objects, arrays, and composite schemas. Local `$ref`s are shown by their resolved component name and shape, never as raw references or an unlabeled JSON blob; recursive schemas are marked at the cycle point.
-- FR-4.4 Command help documents responses per status code and content type, with the same schema walkthrough so an agent can parse or validate the result. Responses without a body still list their status code.
+- FR-4.4 Command help documents responses per status code and content type, with the response description when the spec provides one and the same schema walkthrough so an agent can parse or validate the result. Responses without a body still list their status code.
 - FR-4.5 Help is read-only: rendering it never resolves auth, reads stdin, or sends an HTTP request.
 - FR-4.6 Command help is the single documentation surface; there is no separate long-form docs mode.
 

@@ -24,6 +24,9 @@ pub(crate) fn command_after_help(model: &ApiModel, operation: &ApiOperation) -> 
         operation.method.as_str(),
         operation.path
     );
+    if let Some(description) = &operation.description {
+        let _ = writeln!(text, "  {}", description.trim());
+    }
 
     let _ = writeln!(text, "\nRequest body:");
     match &operation.request_body {
@@ -131,12 +134,16 @@ fn render_request_body(model: &ApiModel, body: &BodySpec, text: &mut String) {
 }
 
 fn render_response(model: &ApiModel, response: &ResponseSpec, text: &mut String) {
-    match &response.content_type {
-        Some(content_type) => {
-            let _ = writeln!(text, "  {} {content_type}", response.status_code);
+    let header = match &response.content_type {
+        Some(content_type) => format!("  {} {content_type}", response.status_code),
+        None => format!("  {}", response.status_code),
+    };
+    match &response.description {
+        Some(description) => {
+            let _ = writeln!(text, "{header} — {}", description.trim());
         }
         None => {
-            let _ = writeln!(text, "  {}", response.status_code);
+            let _ = writeln!(text, "{header}");
         }
     }
     match &response.schema {
@@ -720,6 +727,7 @@ mod tests {
         ApiOperation {
             name: "place-order".to_owned(),
             summary: Some("Place an order".to_owned()),
+            description: None,
             method: HttpMethod::Post,
             path: "/store/orders".to_owned(),
             path_params,
@@ -1042,6 +1050,7 @@ mod tests {
         let responses = vec![
             ResponseSpec {
                 status_code: "200".to_owned(),
+                description: Some("The requested order".to_owned()),
                 content_type: Some("application/json".to_owned()),
                 schema: Some(SchemaSpec::Ref {
                     ref_id: "Order".to_owned(),
@@ -1049,6 +1058,7 @@ mod tests {
             },
             ResponseSpec {
                 status_code: "404".to_owned(),
+                description: Some("Order not found".to_owned()),
                 content_type: Some("application/json".to_owned()),
                 schema: Some(SchemaSpec::Ref {
                     ref_id: "Error".to_owned(),
@@ -1056,6 +1066,7 @@ mod tests {
             },
             ResponseSpec {
                 status_code: "204".to_owned(),
+                description: Some("No content".to_owned()),
                 content_type: None,
                 schema: None,
             },
@@ -1063,17 +1074,59 @@ mod tests {
         let help = command_after_help(&model, &operation(vec![], vec![], None, responses));
 
         assert!(help.contains("Responses"), "{help}");
-        assert!(help.contains("200 application/json"), "{help}");
+        assert!(
+            help.contains("  200 application/json — The requested order"),
+            "{help}"
+        );
         assert!(help.contains("Order (object) {"), "{help}");
         assert!(
             help.contains("id: integer (required) (minimum: 1)"),
             "{help}"
         );
-        assert!(help.contains("404 application/json"), "{help}");
+        assert!(
+            help.contains("  404 application/json — Order not found"),
+            "{help}"
+        );
         assert!(help.contains("Error (object) {"), "{help}");
         assert!(help.contains("message: string (required)"), "{help}");
-        assert!(help.contains("204"), "{help}");
+        assert!(help.contains("  204 — No content"), "{help}");
         assert!(!help.contains("$ref"), "{help}");
+    }
+
+    #[test]
+    fn renders_operation_description_after_request_line() {
+        let model = model_with_registry(BTreeMap::new());
+        let mut operation = operation(vec![], vec![], None, vec![]);
+        operation.description = Some("  Places an order for the current user.\n".to_owned());
+
+        let help = command_after_help(&model, &operation);
+
+        assert!(
+            help.contains(
+                "Request: POST /store/orders\n  Places an order for the current user.\n\nRequest body:"
+            ),
+            "{help}"
+        );
+    }
+
+    #[test]
+    fn omits_absent_operation_and_response_descriptions() {
+        let model = model_with_registry(BTreeMap::new());
+        let responses = vec![ResponseSpec {
+            status_code: "200".to_owned(),
+            description: None,
+            content_type: Some("application/json".to_owned()),
+            schema: None,
+        }];
+
+        let help = command_after_help(&model, &operation(vec![], vec![], None, responses));
+
+        assert!(
+            help.contains("Request: POST /store/orders\n\nRequest body:"),
+            "{help}"
+        );
+        assert!(help.contains("  200 application/json\n"), "{help}");
+        assert!(!help.contains("—"), "{help}");
     }
 
     #[test]
