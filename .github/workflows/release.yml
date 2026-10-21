@@ -1,0 +1,107 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release (tag v<version> is created)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  GH_TOKEN: ${{ github.token }}
+  EVENT_NAME: ${{ github.event_name }}
+  REF_NAME: ${{ github.ref_name }}
+  INPUT_VERSION: ${{ inputs.version }}
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve and validate version
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            VERSION="$INPUT_VERSION"
+            TAG="v$VERSION"
+            if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null; then
+              echo "::error::Tag $TAG already exists; refusing to overwrite it."
+              exit 1
+            fi
+          else
+            TAG="$REF_NAME"
+            VERSION="${TAG#v}"
+          fi
+
+          if [[ "$VERSION" == *[[:cntrl:]]* ]]; then
+            echo "::error::Version must be a single line without control characters."
+            exit 1
+          fi
+
+          version_re='^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$'
+          if [[ ! "$VERSION" =~ $version_re ]]; then
+            echo "::error::Version '$VERSION' is not a valid release version."
+            exit 1
+          fi
+
+          CARGO_VERSION="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')"
+          if [ "$CARGO_VERSION" != "$VERSION" ]; then
+            echo "::error::Version '$VERSION' does not match Cargo.toml package.version '$CARGO_VERSION'."
+            exit 1
+          fi
+
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+
+      - name: Refuse to overwrite an existing release
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" --json tagName >/dev/null 2>&1; then
+            echo "::error::Release $TAG already exists; refusing to overwrite it."
+            exit 1
+          fi
+
+      - name: Check
+        run: make check
+
+      - name: Build
+        run: make build
+
+      - name: Package
+        run: make dist
+
+      - name: Publish
+        run: |
+          set -euo pipefail
+          asset="$(make -s print-dist-asset)"
+          trigger_flags=()
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            trigger_flags+=(--target "$GITHUB_SHA")
+          else
+            trigger_flags+=(--verify-tag)
+          fi
+          release_flags=()
+          if [[ "${VERSION%%+*}" == *-* ]]; then
+            release_flags+=(--prerelease)
+          fi
+          gh release create "$TAG" "$asset" \
+            --title "clining $TAG" \
+            --generate-notes \
+            "${release_flags[@]}" \
+            "${trigger_flags[@]}"
