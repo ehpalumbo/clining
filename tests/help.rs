@@ -83,7 +83,7 @@ fn command_help_shows_summary_request_line_and_parameter_shapes() {
         .expect("request line is rendered");
     assert!(
         summary < description && description < request_line,
-        "description should follow the summary and precede after_help: {stdout}"
+        "description should follow the summary and precede after-long-help: {stdout}"
     );
     assert!(stdout.contains("--status"), "{stdout}");
     assert!(stdout.contains("Filter by status"), "{stdout}");

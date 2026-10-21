@@ -1,7 +1,7 @@
 //! Plain-text help rendering for API operation commands.
 //!
 //! clap renders the static skeleton (about, usage, options) and exposes this
-//! module's output through `after_help`. The walkthroughs here are recursive
+//! module's output through `after_long_help`. The walkthroughs here are recursive
 //! and data-driven, which clap's `help_template` placeholders cannot express,
 //! so they are built as plain text and kept independent of the CLI parser for
 //! direct unit testing.

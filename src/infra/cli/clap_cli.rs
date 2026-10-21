@@ -146,7 +146,7 @@ fn api_command(model: &ApiModel) -> Command {
                 }
                 command_cmd = command_cmd.arg(arg);
             }
-            command_cmd = command_cmd.after_help(command_after_help(model, operation));
+            command_cmd = command_cmd.after_long_help(command_after_help(model, operation));
             group_cmd = group_cmd.subcommand(command_cmd);
         }
         api = api.subcommand(group_cmd);
@@ -989,7 +989,7 @@ mod tests {
     #[test]
     fn command_footer_includes_request_and_body() {
         let cmd = build_cli_command(Some(&sample_model()));
-        let command = cmd
+        let mut command = cmd
             .find_subcommand("pets")
             .unwrap()
             .find_subcommand("pets")
@@ -997,12 +997,19 @@ mod tests {
             .find_subcommand("get-pet")
             .unwrap()
             .clone();
-        let footer = command.get_after_help().map(|s| s.to_string());
+        let footer = command.get_after_long_help().map(|s| s.to_string());
         let footer = footer.unwrap();
         assert!(footer.contains("Request: GET /pets/{petId}"), "{footer}");
         assert!(
             footer.contains("Request body:\n  application/json (required)\n    object"),
             "{footer}"
+        );
+
+        assert!(command.get_after_help().is_none());
+        let short_help = command.render_help().to_string();
+        assert!(
+            !short_help.contains("Request: GET /pets/{petId}"),
+            "{short_help}"
         );
     }
 
@@ -1017,7 +1024,7 @@ mod tests {
             .find_subcommand("place-order")
             .unwrap()
             .clone();
-        let footer = command.get_after_help().map(|s| s.to_string());
+        let footer = command.get_after_long_help().map(|s| s.to_string());
         let footer = footer.unwrap();
         assert!(footer.contains("Order (object) {"), "{footer}");
         assert!(
