@@ -74,12 +74,17 @@ fn command_help_shows_summary_request_line_and_parameter_shapes() {
         String::from_utf8_lossy(&out.stderr)
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(stdout.contains("List pets"), "{stdout}");
+    let summary = stdout.find("List pets").expect("summary is rendered");
+    let description = stdout
+        .find("Returns all pets, optionally filtered")
+        .expect("description is rendered");
+    let request_line = stdout
+        .find("Request: GET /pets")
+        .expect("request line is rendered");
     assert!(
-        stdout.contains("Returns all pets, optionally filtered"),
-        "{stdout}"
+        summary < description && description < request_line,
+        "description should follow the summary and precede after_help: {stdout}"
     );
-    assert!(stdout.contains("Request: GET /pets"), "{stdout}");
     assert!(stdout.contains("--status"), "{stdout}");
     assert!(stdout.contains("Filter by status"), "{stdout}");
     assert!(stdout.contains("(optional)"), "{stdout}");

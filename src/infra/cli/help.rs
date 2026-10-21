@@ -24,10 +24,6 @@ pub(crate) fn command_after_help(model: &ApiModel, operation: &ApiOperation) -> 
         operation.method.as_str(),
         operation.path
     );
-    if let Some(description) = &operation.description {
-        let _ = writeln!(text, "  {}", description.trim());
-    }
-
     let _ = writeln!(text, "\nRequest body:");
     match &operation.request_body {
         Some(body) => render_request_body(model, body, &mut text),
@@ -1094,23 +1090,7 @@ mod tests {
     }
 
     #[test]
-    fn renders_operation_description_after_request_line() {
-        let model = model_with_registry(BTreeMap::new());
-        let mut operation = operation(vec![], vec![], None, vec![]);
-        operation.description = Some("  Places an order for the current user.\n".to_owned());
-
-        let help = command_after_help(&model, &operation);
-
-        assert!(
-            help.contains(
-                "Request: POST /store/orders\n  Places an order for the current user.\n\nRequest body:"
-            ),
-            "{help}"
-        );
-    }
-
-    #[test]
-    fn omits_absent_operation_and_response_descriptions() {
+    fn omits_absent_response_descriptions() {
         let model = model_with_registry(BTreeMap::new());
         let responses = vec![ResponseSpec {
             status_code: "200".to_owned(),

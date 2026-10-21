@@ -11,7 +11,7 @@ use crate::application::api_invocation::ApiInvocationService;
 use crate::application::api_model::ApiModelService;
 use crate::application::auth::auth_from_options;
 use crate::domain::errors::DomainError;
-use crate::domain::model::{ApiInvocationRequest, ApiModel, ApiOperationGroup};
+use crate::domain::model::{ApiInvocationRequest, ApiModel, ApiOperation, ApiOperationGroup};
 use crate::infra::cli::help::{command_after_help, param_help_text};
 
 /// Builds the full CLI command tree: the `install` subcommand plus, when a
@@ -122,6 +122,9 @@ fn api_command(model: &ApiModel) -> Command {
             if let Some(summary) = &operation.summary {
                 command_cmd = command_cmd.about(summary);
             }
+            if let Some(long_about) = operation_long_about(operation) {
+                command_cmd = command_cmd.long_about(long_about);
+            }
             for param in &operation.path_params {
                 command_cmd = command_cmd.arg(
                     Arg::new(param.canonical_name.clone())
@@ -149,6 +152,20 @@ fn api_command(model: &ApiModel) -> Command {
         api = api.subcommand(group_cmd);
     }
     api
+}
+
+/// Long help for an operation command: the summary followed by the operation
+/// description when the spec provides one. The summary alone stays on `about`
+/// so `-h` and group listings keep their compact form.
+fn operation_long_about(operation: &ApiOperation) -> Option<String> {
+    let description = operation.description.as_deref()?.trim();
+    if description.is_empty() {
+        return None;
+    }
+    match &operation.summary {
+        Some(summary) => Some(format!("{summary}\n\n{description}")),
+        None => Some(description.to_owned()),
+    }
 }
 
 /// Help text for a group subcommand: the tag description when present, else a
@@ -492,6 +509,19 @@ mod tests {
         SchemaSpec,
     };
 
+    fn command_help(model: &ApiModel, group: &str, name: &str) -> String {
+        build_cli_command(Some(model))
+            .find_subcommand(group)
+            .unwrap()
+            .find_subcommand(group)
+            .unwrap()
+            .find_subcommand(name)
+            .unwrap()
+            .clone()
+            .render_long_help()
+            .to_string()
+    }
+
     fn sample_model() -> ApiModel {
         ApiModel {
             name: "pets".to_owned(),
@@ -505,7 +535,7 @@ mod tests {
                 operations: vec![ApiOperation {
                     name: "get-pet".to_owned(),
                     summary: Some("Get a pet".to_owned()),
-                    description: None,
+                    description: Some("Returns the requested pet by id.".to_owned()),
                     method: HttpMethod::Get,
                     path: "/pets/{petId}".to_owned(),
                     path_params: vec![Param {
@@ -844,17 +874,7 @@ mod tests {
 
     #[test]
     fn command_help_shows_params_and_body_schema() {
-        let cmd = build_cli_command(Some(&sample_model()));
-        let mut command = cmd
-            .find_subcommand("pets")
-            .unwrap()
-            .find_subcommand("pets")
-            .unwrap()
-            .find_subcommand("get-pet")
-            .unwrap()
-            .clone();
-        command.clone().debug_assert();
-        let help = command.render_help().to_string();
+        let help = command_help(&sample_model(), "pets", "get-pet");
         assert!(help.contains("--pet-id"), "{help}");
         assert!(help.contains("(required)"), "{help}");
         assert!(help.contains("Request: GET /pets/{petId}"), "{help}");
@@ -865,6 +885,48 @@ mod tests {
             "{help}"
         );
         assert!(help.contains("Responses"), "{help}");
+    }
+
+    #[test]
+    fn command_long_help_places_description_after_summary() {
+        let help = command_help(&sample_model(), "pets", "get-pet");
+        let summary = help.find("Get a pet").expect("summary is rendered");
+        let description = help
+            .find("Returns the requested pet by id.")
+            .expect("description is rendered");
+        assert!(summary < description, "{help}");
+    }
+
+    #[test]
+    fn operation_long_about_combines_summary_and_description() {
+        let mut operation = sample_model().operation_groups[0].operations[0].clone();
+        assert_eq!(
+            operation_long_about(&operation).as_deref(),
+            Some("Get a pet\n\nReturns the requested pet by id.")
+        );
+
+        operation.summary = None;
+        assert_eq!(
+            operation_long_about(&operation).as_deref(),
+            Some("Returns the requested pet by id.")
+        );
+
+        operation.description = None;
+        assert_eq!(operation_long_about(&operation), None);
+    }
+
+    #[test]
+    fn group_help_keeps_summary_only() {
+        let cmd = build_cli_command(Some(&sample_model()));
+        let mut group = cmd
+            .find_subcommand("pets")
+            .unwrap()
+            .find_subcommand("pets")
+            .unwrap()
+            .clone();
+        let help = group.render_help().to_string();
+        assert!(help.contains("Get a pet"), "{help}");
+        assert!(!help.contains("Returns the requested pet by id."), "{help}");
     }
 
     #[test]
