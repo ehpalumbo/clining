@@ -108,8 +108,7 @@ fn parameter_details(model: &ApiModel, schema: &SchemaSpec) -> String {
 }
 
 fn render_request_body(model: &ApiModel, body: &BodySpec, text: &mut String) {
-    let _ = writeln!(
-        text,
+    let header = format!(
         "  {} ({})",
         body.content_type,
         if body.required {
@@ -118,6 +117,14 @@ fn render_request_body(model: &ApiModel, body: &BodySpec, text: &mut String) {
             "optional"
         }
     );
+    match &body.description {
+        Some(description) => {
+            let _ = writeln!(text, "{header} — {}", description.trim());
+        }
+        None => {
+            let _ = writeln!(text, "{header}");
+        }
+    }
     match &body.schema {
         // No label: the schema already sits under the content type, and a
         // "body" key here could be mistaken for a wrapper property of the
@@ -779,6 +786,7 @@ mod tests {
         BodySpec {
             required: true,
             content_type: "application/json".to_owned(),
+            description: None,
             schema: Some(SchemaSpec::Ref {
                 ref_id: "Order".to_owned(),
             }),
@@ -813,6 +821,25 @@ mod tests {
         );
         assert!(help.contains("tags: array<string>"), "{help}");
         assert!(!help.contains("$ref"), "{help}");
+    }
+
+    #[test]
+    fn appends_request_body_description_to_content_type_line() {
+        let model = model_with_registry(order_registry());
+        let body = BodySpec {
+            required: true,
+            content_type: "application/json".to_owned(),
+            description: Some("  Order details.  ".to_owned()),
+            schema: Some(SchemaSpec::Ref {
+                ref_id: "Order".to_owned(),
+            }),
+        };
+        let help = command_after_help(&model, &operation(vec![], vec![], Some(body), vec![]));
+
+        assert!(
+            help.contains("  application/json (required) — Order details.\n"),
+            "{help}"
+        );
     }
 
     #[test]
@@ -855,6 +882,7 @@ mod tests {
         let body = BodySpec {
             required: false,
             content_type: "application/json".to_owned(),
+            description: None,
             schema: Some(SchemaSpec::Ref {
                 ref_id: "Cart".to_owned(),
             }),
@@ -885,6 +913,7 @@ mod tests {
         let body = BodySpec {
             required: true,
             content_type: "application/json".to_owned(),
+            description: None,
             schema: Some(SchemaSpec::Ref {
                 ref_id: "Node".to_owned(),
             }),
@@ -930,6 +959,7 @@ mod tests {
         let body = BodySpec {
             required: true,
             content_type: "application/json".to_owned(),
+            description: None,
             schema: Some(SchemaSpec::Ref {
                 ref_id: "Alias".to_owned(),
             }),
@@ -970,6 +1000,7 @@ mod tests {
         let body = BodySpec {
             required: true,
             content_type: "application/json".to_owned(),
+            description: None,
             schema: Some(schema),
         };
         let help = command_after_help(&model, &operation(vec![], vec![], Some(body), vec![]));
@@ -1007,6 +1038,7 @@ mod tests {
         let body = BodySpec {
             required: true,
             content_type: "application/json".to_owned(),
+            description: None,
             schema: Some(SchemaSpec::Ref {
                 ref_id: "Extended".to_owned(),
             }),
@@ -1115,6 +1147,7 @@ mod tests {
         let body = BodySpec {
             required: false,
             content_type: "application/json".to_owned(),
+            description: None,
             schema: Some(SchemaSpec::Ref {
                 ref_id: "Missing".to_owned(),
             }),
@@ -1126,6 +1159,7 @@ mod tests {
         let no_schema = BodySpec {
             required: false,
             content_type: "application/json".to_owned(),
+            description: None,
             schema: None,
         };
         let help = command_after_help(&model, &operation(vec![], vec![], Some(no_schema), vec![]));
@@ -1134,6 +1168,7 @@ mod tests {
         let body_with_missing = BodySpec {
             required: false,
             content_type: "application/json".to_owned(),
+            description: None,
             schema: Some(object(
                 BTreeMap::from([(
                     "missing".to_owned(),
@@ -1262,6 +1297,7 @@ mod tests {
         let body = BodySpec {
             required: true,
             content_type: "application/json".to_owned(),
+            description: None,
             schema: Some(object(
                 BTreeMap::from([(
                     "tags".to_owned(),
@@ -1285,6 +1321,7 @@ mod tests {
         let body = BodySpec {
             required: true,
             content_type: "application/json".to_owned(),
+            description: None,
             schema: Some(SchemaSpec::Unknown {
                 raw_json: r#"{"x-extension":true}"#.to_owned(),
             }),

@@ -82,6 +82,7 @@ pub struct Parameter {
 #[derive(Debug, Deserialize)]
 pub struct RequestBody {
     pub required: Option<bool>,
+    pub description: Option<String>,
     pub content: BTreeMap<String, MediaType>,
 }
 

@@ -245,6 +245,7 @@ impl Parser {
         BodySpec {
             required: rb.required.unwrap_or(false),
             content_type,
+            description: rb.description.clone(),
             schema,
         }
     }
@@ -452,6 +453,7 @@ mod tests {
                     "tags": ["pets"],
                     "requestBody": {
                         "required": true,
+                        "description": "Pet to add to the store",
                         "content": {
                             "application/json": { "schema": { "type": "object" } }
                         }
@@ -586,6 +588,7 @@ mod tests {
         let body = create.request_body.as_ref().unwrap();
         assert!(body.required);
         assert_eq!(body.content_type, "application/json");
+        assert_eq!(body.description.as_deref(), Some("Pet to add to the store"));
         assert_eq!(
             body.schema,
             Some(SchemaSpec::Object {

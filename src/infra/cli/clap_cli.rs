@@ -555,6 +555,7 @@ mod tests {
                     request_body: Some(BodySpec {
                         required: true,
                         content_type: "application/json".to_owned(),
+                        description: None,
                         schema: Some(SchemaSpec::Object {
                             properties: BTreeMap::new(),
                             extra_json: None,
@@ -608,6 +609,7 @@ mod tests {
                     request_body: Some(BodySpec {
                         required: true,
                         content_type: "application/json".to_owned(),
+                        description: None,
                         schema: Some(SchemaSpec::Ref {
                             ref_id: "Order".to_owned(),
                         }),

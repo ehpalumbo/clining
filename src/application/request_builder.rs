@@ -311,6 +311,7 @@ mod tests {
         let spec = BodySpec {
             required: true,
             content_type: "application/json".to_owned(),
+            description: None,
             schema: None,
         };
         let operation = operation_with("/pets", vec![], vec![], Some(spec));
@@ -330,6 +331,7 @@ mod tests {
         let spec = BodySpec {
             required: true,
             content_type: "application/json".to_owned(),
+            description: None,
             schema: None,
         };
         let operation = operation_with("/pets", vec![], vec![], Some(spec));
@@ -354,6 +356,7 @@ mod tests {
         let spec = BodySpec {
             required: false,
             content_type: String::new(),
+            description: None,
             schema: None,
         };
         let operation = operation_with("/pets", vec![], vec![], Some(spec));

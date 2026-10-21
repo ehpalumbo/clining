@@ -85,6 +85,7 @@ pub struct Param {
 pub struct BodySpec {
     pub required: bool,
     pub content_type: String,
+    pub description: Option<String>,
     pub schema: Option<SchemaSpec>,
 }
 
