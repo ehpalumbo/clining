@@ -8,16 +8,15 @@
 
 ### Prebuilt binaries
 
-Each release publishes a Linux x86_64 tarball and a checksum file, so installing does not require a Rust toolchain. Replace `<version>` with the release you want (for example `0.1.0`):
+Each release publishes a Linux x86_64 tarball, so installing does not require a Rust toolchain. Replace `<version>` with the release you want (for example `0.1.0`):
 
 ```bash
-gh release download v<version> -p 'clining-v*.tar.gz' -p SHA256SUMS
-sha256sum -c SHA256SUMS
+gh release download v<version> -p 'clining-v*.tar.gz'
 tar -xzf clining-v<version>-x86_64-unknown-linux-gnu.tar.gz
 install -m 0755 clining ~/.local/bin/clining
 ```
 
-The archive contains only the `clining` binary at its root, and `SHA256SUMS` lets you verify it before installing.
+The archive contains only the `clining` binary at its root. GitHub publishes a SHA-256 digest for each release asset; view it with `gh release view v<version> --json assets`.
 
 ### From source
 

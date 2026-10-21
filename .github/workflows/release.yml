@@ -100,7 +100,7 @@ jobs:
           if [[ "${VERSION%%+*}" == *-* ]]; then
             release_flags+=(--prerelease)
           fi
-          gh release create "$TAG" "$asset" dist/SHA256SUMS \
+          gh release create "$TAG" "$asset" \
             --title "clining $TAG" \
             --generate-notes \
             "${release_flags[@]}" \

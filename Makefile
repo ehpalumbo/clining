@@ -19,11 +19,10 @@ check:
 build:
 	$(CARGO) build --release
 
-## Package the release binary and its checksum into $(DIST_DIR).
+## Package the release binary into $(DIST_DIR).
 dist: build
 	mkdir -p "$(DIST_DIR)"
 	tar -czf "$(DIST_ASSET)" -C target/release clining
-	cd "$(DIST_DIR)" && sha256sum "$(notdir $(DIST_ASSET))" > SHA256SUMS
 
 ## Print the release asset path without building it.
 print-dist-asset:
