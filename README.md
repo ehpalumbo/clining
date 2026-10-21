@@ -11,12 +11,12 @@
 Each release publishes a Linux x86_64 tarball, so installing does not require a Rust toolchain. Replace `<version>` with the release you want (for example `0.1.0`):
 
 ```bash
-gh release download v<version> -p 'clining-v*.tar.gz'
+gh release download v<version> --repo ehpalumbo/clining -p 'clining-v*.tar.gz'
 tar -xzf clining-v<version>-x86_64-unknown-linux-gnu.tar.gz
-install -m 0755 clining ~/.local/bin/clining
+install -Dm755 clining ~/.local/bin/clining
 ```
 
-The archive contains only the `clining` binary at its root. GitHub publishes a SHA-256 digest for each release asset; view it with `gh release view v<version> --json assets`.
+The archive contains only the `clining` binary at its root. GitHub publishes a SHA-256 digest for each release asset; view it with `gh release view v<version> --repo ehpalumbo/clining --json assets`.
 
 ### From source
 
