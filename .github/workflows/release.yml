@@ -60,7 +60,7 @@ jobs:
             exit 1
           fi
 
-          CARGO_VERSION="$(cargo pkgid | sed 's/.*@//')"
+          CARGO_VERSION="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')"
           if [ "$CARGO_VERSION" != "$VERSION" ]; then
             echo "::error::Version '$VERSION' does not match Cargo.toml package.version '$CARGO_VERSION'."
             exit 1
