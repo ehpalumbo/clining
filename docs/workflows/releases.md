@@ -50,16 +50,15 @@ resolve version ──> refuse existing tag/release ──> make check ──> m
 
 - `make check` is the same gate as CI: formatting, clippy with `-D warnings`, and all tests.
 - `make build` produces the release binary.
-- `make dist` packages the binary and checksums. The workflow reuses the Makefile target rather than duplicating the layout, so local verification matches CI.
+- `make dist` packages the binary. The workflow reuses the Makefile target rather than duplicating the layout, so local verification matches CI.
 
 A failure in any stage leaves no Release behind. On manual dispatch it also leaves no tag; on a tag push the tag remains, so delete and recreate it deliberately if you need to retry (see Failure and recovery).
 
 ## Asset contract
 
-Each Release carries:
+Each Release carries `clining-v<version>-<target-triple>.tar.gz` — a gzip tarball whose only entry is the `clining` binary at the archive root. Extracting it yields `./clining`.
 
-- `clining-v<version>-<target-triple>.tar.gz` — a gzip tarball whose only entry is the `clining` binary at the archive root. Extracting it yields `./clining`.
-- `SHA256SUMS` — a checksum line naming just the tarball, verifiable with `sha256sum -c SHA256SUMS`.
+GitHub computes a SHA-256 digest for every uploaded release asset at upload time and exposes it in the Releases UI, the REST/GraphQL API, and `gh release view v<version> --json assets`; no separate checksum asset is produced.
 
 Only the runner's host target is built (`x86_64-unknown-linux-gnu` on `ubuntu-latest`). Multi-platform matrices, crates.io publishing, signing, and package-manager taps are out of scope.
 
@@ -79,8 +78,7 @@ To retry, first fix the cause. If the previous attempt actually created the tag 
 ## Verifying a release locally
 
 ```bash
-gh release download v<version> -p 'clining-v*.tar.gz' -p SHA256SUMS
-sha256sum -c SHA256SUMS
+gh release download v<version> -p 'clining-v*.tar.gz'
 tar -xzf clining-v<version>-x86_64-unknown-linux-gnu.tar.gz
 ./clining --version
 ```
