@@ -14,6 +14,12 @@ Repository-wide architectural guidance for the clining codebase.
 
 - [Architecture Overview](architecture/overview.md) - The concentric domain/application/infra layering with inward-only dependencies, application-owned ports, key domain rules, and the install/invoke data flows.
 
+## Workflows
+
+Operational processes that keep the repository shippable.
+
+- [Release Process](workflows/releases.md) - How tag pushes and manual dispatches run the quality gate, package the binary with checksums, and publish GitHub Releases.
+
 ## Decision Records
 
 Architecture decision records capturing the context, choices, and trade-offs behind structural changes to the codebase.
@@ -25,6 +31,7 @@ Architecture decision records capturing the context, choices, and trade-offs beh
 The master phased implementation plan for clining; completed phase and issue working documents live in the archive below.
 
 - [Phased Implementation Plan](plans/implementation-plan.md) - The four-phase, one-commit-per-phase build plan for clining v0 with per-phase status and the whole-feature definition of done.
+- [Issue #7: CI Release Pipeline](plans/issue-7-release-pipeline.md) - Adds a tag/dispatch-triggered release workflow, Makefile packaging target, and release documentation so binaries can be downloaded without a Rust toolchain.
 
 ## Plans Archive
 
