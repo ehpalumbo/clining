@@ -58,7 +58,7 @@ A failure in any stage leaves no Release behind. On manual dispatch it also leav
 
 Each Release carries `clining-v<version>-<target-triple>.tar.gz` — a gzip tarball whose only entry is the `clining` binary at the archive root. Extracting it yields `./clining`.
 
-GitHub computes a SHA-256 digest for every uploaded release asset at upload time and exposes it in the Releases UI, the REST/GraphQL API, and `gh release view v<version> --json assets`; no separate checksum asset is produced.
+GitHub computes a SHA-256 digest for every uploaded release asset at upload time and exposes it in the Releases UI, the REST/GraphQL API, and `gh release view v<version> --repo ehpalumbo/clining --json assets`; no separate checksum asset is produced.
 
 Only the runner's host target is built (`x86_64-unknown-linux-gnu` on `ubuntu-latest`). Multi-platform matrices, crates.io publishing, signing, and package-manager taps are out of scope.
 
@@ -78,7 +78,7 @@ To retry, first fix the cause. If the previous attempt actually created the tag 
 ## Verifying a release locally
 
 ```bash
-gh release download v<version> -p 'clining-v*.tar.gz'
+gh release download v<version> --repo ehpalumbo/clining -p 'clining-v*.tar.gz'
 tar -xzf clining-v<version>-x86_64-unknown-linux-gnu.tar.gz
 ./clining --version
 ```
