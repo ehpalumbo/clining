@@ -275,6 +275,51 @@ fn reinstall_without_flags_clears_auth() {
 }
 
 #[test]
+fn custom_authorization_header_bypasses_unresolvable_token_source() {
+    let dir = temp_dir("auth-custom-header-override");
+    install(&dir, "pets", None);
+    let model_path = dir.join("pets.json");
+    let mut model: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&model_path).unwrap()).unwrap();
+    model["auth"] = serde_json::json!({
+        "source": "env",
+        "var": "CLINING_E2E_DEFINITELY_UNSET_CUSTOM_AUTH_XYZ"
+    });
+
+    let server = MockServer::start(1);
+    let base = server_base(&server);
+    model["base_url"] = serde_json::Value::String(base);
+    fs::write(&model_path, serde_json::to_string_pretty(&model).unwrap()).unwrap();
+
+    let invoke = run_cli(
+        &dir,
+        &[
+            "pets",
+            "pets",
+            "get-pet",
+            "--pet-id",
+            "42",
+            "-H",
+            "Authorization: Token override-secret",
+        ],
+        None,
+    );
+    assert!(
+        invoke.status.success(),
+        "{}",
+        String::from_utf8_lossy(&invoke.stderr)
+    );
+    let sent = request_text(&server.request(0)).to_ascii_lowercase();
+    assert!(
+        sent.contains("authorization: token override-secret"),
+        "{sent}"
+    );
+    assert!(!sent.contains("bearer"), "{sent}");
+
+    server.handle.join().unwrap();
+}
+
+#[test]
 fn relative_token_file_is_stored_absolute_and_invokable_from_other_cwd() {
     let store = temp_dir("auth-rel");
     let work_a = store.join("a");

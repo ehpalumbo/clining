@@ -3,4 +3,5 @@
 
 pub mod command_name;
 pub mod errors;
+pub mod headers;
 pub mod model;

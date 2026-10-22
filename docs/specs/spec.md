@@ -27,7 +27,7 @@ Platform target: **Linux only**, implemented in **Rust**, organized with **onion
 | Command | Meaning |
 | --- | --- |
 | `clining install <name> <path-or-uri> [--base-url <url>] [--token-env <VAR> \| --token-file <path>]` | One-off setup: fetch the spec, parse it, persist the API model with an optional Bearer token reference. |
-| `clining <name> <group> <command> [--param value]... [< body.json]` | Invoke an endpoint. |
+| `clining <name> <group> <command> [--param value]... [-H <header>]... [< body.json]` | Invoke an endpoint, optionally adding custom request headers. |
 | `clining <name> --help` | List command groups for the API. |
 | `clining <name> <group> --help` | List commands in the group. |
 | `clining <name> <group> <command> --help` | Show full input/output documentation: request line, parameter shapes, request body walkthrough, and response schemas. |
@@ -61,6 +61,7 @@ Platform target: **Linux only**, implemented in **Rust**, organized with **onion
 - FR-3.5 Exit code is `0` for 2xx responses and `1` for any non-2xx response.
 - FR-3.6 Validation is **presence-only**: required path/query params and a required body must be supplied; a body supplied for an endpoint that declares none is rejected. Schemas are stored and shown in help but not enforced in v0.
 - FR-3.7 When the model carries an auth reference, the token is resolved at invocation time (env var verbatim; file with trailing newline trimmed) and sent as `Authorization: Bearer <token>` on every request. Unresolvable sources fail with `error:` on stderr and exit non-zero without sending the request. The token value never appears in the model file, logs, help, or stderr.
+- FR-3.8 Every endpoint command accepts repeatable custom request headers as `-H <header>` / `--clining-header <header>`. Each occurrence is a `Name: value` pair split at the first colon; optional HTTP whitespace (spaces and tabs) is trimmed from both ends. Headers override generated `User-Agent`, `Accept`, `Content-Type`, and `Authorization` headers case-insensitively and are sent as separate header lines in input order, so repeating a name yields repeated lines. A custom `Authorization` suppresses generated Bearer auth and skips token resolution entirely. Header names must be RFC 9110 tokens; values accept only tab and printable ASCII (`0x20`–`0x7E`); framing and hop-by-hop names (`Content-Length`, `Transfer-Encoding`, `Connection`, `Keep-Alive`, `Proxy-Connection`, `TE`, `Trailer`, `Upgrade`, `Proxy-Authenticate`, `Proxy-Authorization`) are rejected. Custom headers are command-scoped. If an API path or query parameter canonicalizes to `clining-header`, the parameter keeps the long form and the custom-header flag is available as `-H` only.
 
 ### FR-4 Discovery
 
@@ -93,8 +94,9 @@ Platform target: **Linux only**, implemented in **Rust**, organized with **onion
 | Invalid stored model | Model file exists but is unparseable/corrupt | stderr with file path + reason; exit 1 |
 | Invalid spec | Spec source missing/unreadable or not OpenAPI 3.0.x | stderr; exit 1; nothing persisted |
 | Parameter/body errors | Required param/body missing, or body supplied where none declared | stderr; exit 1; request not sent |
+| Invalid header | Malformed `Name: value`, invalid/denylisted name, or non-ASCII/control value | stderr `error: invalid header: ...`; exit 1; request not sent |
 | Auth errors | Token source unresolvable (var unset/empty, file missing/unreadable/empty) | stderr; exit 1; request not sent (install persists nothing) |
-| Usage errors | Mutually exclusive flags supplied together (e.g. both `--token-env` and `--token-file`) | clap usage error on stderr; exit 2; request not sent (install persists nothing) |
+| Usage errors | Mutually exclusive flags supplied together (e.g. both `--token-env` and `--token-file`), a missing flag value, or an unknown flag | clap usage error on stderr; exit 2; request not sent (install persists nothing) |
 | Network/I-O errors | Fetch, HTTP, or filesystem failure | stderr with context; exit 1 |
 
 All errors go to stderr as a one-line `error: <message>`; all failure paths exit non-zero.
@@ -111,7 +113,8 @@ All errors go to stderr as a one-line `error: <message>`; all failure paths exit
 ## Out of Scope (v0)
 
 - JSON Schema validation of request bodies and parameter values (presence-only only).
-- Auth beyond Bearer tokens via env var or token file (no API keys, OAuth flows, etc.).
+- Persistent non-Bearer authentication and credential management. Ad-hoc custom headers via `-H` are supported, but header files (`-H @file`), environment-provided headers, install-time headers, API/group header inheritance, and a `--config` file are not.
+- Auth beyond Bearer tokens via env var or token file (no API keys, OAuth flows, etc.). A caller-supplied `Authorization` header can override the generated Bearer header per invocation, but it is not persisted.
 - OpenAPI 3.1 and 2.0 (Swagger) support.
 - Async/concurrent execution.
 - Convenience features such as `clining list`, command aliases, and shell tab-completion.

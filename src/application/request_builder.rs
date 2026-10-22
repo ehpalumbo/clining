@@ -5,22 +5,26 @@ use std::collections::HashMap;
 use url::Url;
 
 use crate::domain::errors::DomainError;
+use crate::domain::headers::{CustomHeader, is_forbidden_header_name};
 use crate::domain::model::{ApiOperation, HttpRequest};
 
 /// Builds a fully-specified `HttpRequest` from an operation, supplied values,
-/// an optional body, and an optional resolved bearer token. Values are keyed
-/// by the CLI parameter name (`Param::cli_name`); path and query parameters
-/// are resolved back to their original spec names during substitution.
-/// When `token` is `Some`, an `Authorization: Bearer <token>` header is
-/// appended (the token must already be resolved; this function performs no I/O).
+/// an optional body, an optional resolved bearer token, and any custom headers.
+/// Values are keyed by the CLI parameter name (`Param::cli_name`); path and
+/// query parameters are resolved back to their original spec names during
+/// substitution. When `token` is `Some`, an `Authorization: Bearer <token>`
+/// header is appended (the token must already be resolved; this function
+/// performs no I/O). Custom headers override generated headers
+/// case-insensitively and are appended in input order, one pair per occurrence.
 pub fn build_request(
     base_url: &str,
     operation: &ApiOperation,
     values: &HashMap<String, Vec<String>>,
     body: Option<&[u8]>,
     token: Option<&str>,
+    custom_headers: &[CustomHeader],
 ) -> Result<HttpRequest, DomainError> {
-    let body = body.filter(|b| !b.is_empty());
+    let mut body = body.filter(|b| !b.is_empty());
     let url = build_url(base_url, operation, values)?;
 
     let mut headers: Vec<(String, String)> = vec![
@@ -36,21 +40,14 @@ pub fn build_request(
 
     match &operation.request_body {
         Some(spec) => {
-            if let Some(bytes) = body {
+            if body.is_some() {
                 let content_type = if spec.content_type.is_empty() {
                     "application/json"
                 } else {
                     &spec.content_type
                 };
                 headers.push(("Content-Type".to_owned(), content_type.to_owned()));
-                return Ok(HttpRequest {
-                    method: operation.method,
-                    url,
-                    headers,
-                    body: Some(bytes.to_vec()),
-                });
-            }
-            if spec.required {
+            } else if spec.required {
                 return Err(DomainError::Body {
                     message: format!("command '{}' requires a request body", operation.name),
                 });
@@ -62,15 +59,47 @@ pub fn build_request(
                     message: format!("command '{}' declares no request body", operation.name),
                 });
             }
+            body = None;
         }
     }
 
+    let headers = merge_headers(headers, custom_headers)?;
     Ok(HttpRequest {
         method: operation.method,
         url,
         headers,
-        body: None,
+        body: body.map(<[u8]>::to_vec),
     })
+}
+
+/// Merges custom headers into the generated header list.
+///
+/// Generated headers whose names match a custom header (ASCII
+/// case-insensitive) are removed, then every custom pair is appended in input
+/// order. Repeated custom names intentionally remain distinct entries so they
+/// are sent as separate header lines.
+fn merge_headers(
+    generated: Vec<(String, String)>,
+    custom: &[CustomHeader],
+) -> Result<Vec<(String, String)>, DomainError> {
+    for header in custom {
+        if is_forbidden_header_name(&header.name) {
+            return Err(DomainError::Header {
+                message: format!("header '{}' is not allowed", header.name),
+            });
+        }
+    }
+
+    let mut merged: Vec<(String, String)> = generated
+        .into_iter()
+        .filter(|(name, _)| !custom.iter().any(|h| h.name.eq_ignore_ascii_case(name)))
+        .collect();
+    merged.extend(
+        custom
+            .iter()
+            .map(|header| (header.name.clone(), header.value.clone())),
+    );
+    Ok(merged)
 }
 
 /// Builds a URL by substituting path parameters and serializing query parameters.
@@ -146,6 +175,16 @@ mod tests {
 
     use crate::domain::model::{BodySpec, HttpMethod, Param};
 
+    fn build(
+        base_url: &str,
+        operation: &ApiOperation,
+        values: &HashMap<String, Vec<String>>,
+        body: Option<&[u8]>,
+        token: Option<&str>,
+    ) -> Result<HttpRequest, DomainError> {
+        build_request(base_url, operation, values, body, token, &[])
+    }
+
     fn operation_with(
         path: &str,
         path_params: Vec<Param>,
@@ -192,7 +231,7 @@ mod tests {
             ("pet-id".to_owned(), vec!["123".to_owned()]),
             ("status".to_owned(), vec!["available".to_owned()]),
         ]);
-        let req = build_request(
+        let req = build(
             "https://api.example.com/v1/",
             &operation,
             &values,
@@ -225,8 +264,7 @@ mod tests {
             "status".to_owned(),
             vec!["available".to_owned(), "sold".to_owned()],
         )]);
-        let req =
-            build_request("https://api.example.com", &operation, &values, None, None).unwrap();
+        let req = build("https://api.example.com", &operation, &values, None, None).unwrap();
         assert_eq!(
             req.url,
             "https://api.example.com/pets?status=available&status=sold"
@@ -240,8 +278,7 @@ mod tests {
             ("pet-id".to_owned(), vec!["a/b c".to_owned()]),
             ("status".to_owned(), vec!["x&y=1".to_owned()]),
         ]);
-        let req =
-            build_request("https://api.example.com", &operation, &values, None, None).unwrap();
+        let req = build("https://api.example.com", &operation, &values, None, None).unwrap();
         assert_eq!(
             req.url,
             "https://api.example.com/pets/a%2Fb%20c?status=x%26y%3D1"
@@ -251,7 +288,7 @@ mod tests {
     #[test]
     fn missing_required_path_param_is_error() {
         let operation = operation_with("/pets/{petId}", vec![pet_id()], vec![], None);
-        let err = build_request(
+        let err = build(
             "https://api.example.com",
             &operation,
             &HashMap::new(),
@@ -274,7 +311,7 @@ mod tests {
             schema: None,
         };
         let operation = operation_with("/pets", vec![], vec![required], None);
-        let err = build_request(
+        let err = build(
             "https://api.example.com",
             &operation,
             &HashMap::new(),
@@ -295,7 +332,7 @@ mod tests {
             schema: None,
         };
         let operation = operation_with("/pets/{petId}", vec![optional], vec![], None);
-        let req = build_request(
+        let req = build(
             "https://api.example.com",
             &operation,
             &HashMap::new(),
@@ -315,7 +352,7 @@ mod tests {
             schema: None,
         };
         let operation = operation_with("/pets", vec![], vec![], Some(spec));
-        let err = build_request(
+        let err = build(
             "https://api.example.com",
             &operation,
             &HashMap::new(),
@@ -335,7 +372,7 @@ mod tests {
             schema: None,
         };
         let operation = operation_with("/pets", vec![], vec![], Some(spec));
-        let req = build_request(
+        let req = build(
             "https://api.example.com",
             &operation,
             &HashMap::new(),
@@ -360,7 +397,7 @@ mod tests {
             schema: None,
         };
         let operation = operation_with("/pets", vec![], vec![], Some(spec));
-        let req = build_request(
+        let req = build(
             "https://api.example.com",
             &operation,
             &HashMap::new(),
@@ -378,7 +415,7 @@ mod tests {
     #[test]
     fn unexpected_body_is_error() {
         let operation = operation_with("/pets", vec![], vec![], None);
-        let err = build_request(
+        let err = build(
             "https://api.example.com",
             &operation,
             &HashMap::new(),
@@ -392,7 +429,7 @@ mod tests {
     #[test]
     fn empty_body_treated_as_no_body() {
         let operation = operation_with("/pets", vec![], vec![], None);
-        let req = build_request(
+        let req = build(
             "https://api.example.com",
             &operation,
             &HashMap::new(),
@@ -406,7 +443,7 @@ mod tests {
     #[test]
     fn invalid_base_url_is_parameter_error() {
         let operation = operation_with("/pets", vec![], vec![], None);
-        let err = build_request("not a url", &operation, &HashMap::new(), None, None).unwrap_err();
+        let err = build("not a url", &operation, &HashMap::new(), None, None).unwrap_err();
         assert!(matches!(err, DomainError::Parameter { .. }), "{err}");
         assert!(err.to_string().contains("base URL"), "{err}");
     }
@@ -414,7 +451,7 @@ mod tests {
     #[test]
     fn bearer_token_adds_authorization_header() {
         let operation = operation_with("/pets", vec![], vec![], None);
-        let req = build_request(
+        let req = build(
             "https://api.example.com",
             &operation,
             &HashMap::new(),
@@ -432,7 +469,7 @@ mod tests {
     #[test]
     fn no_token_means_no_authorization_header() {
         let operation = operation_with("/pets", vec![], vec![], None);
-        let req = build_request(
+        let req = build(
             "https://api.example.com",
             &operation,
             &HashMap::new(),
@@ -441,5 +478,154 @@ mod tests {
         )
         .unwrap();
         assert!(!req.headers.iter().any(|(k, _)| k == "Authorization"));
+    }
+
+    fn header(name: &str, value: &str) -> CustomHeader {
+        CustomHeader {
+            name: name.to_owned(),
+            value: value.to_owned(),
+        }
+    }
+
+    #[test]
+    fn custom_headers_override_generated_headers_case_insensitively() {
+        let operation = operation_with("/pets", vec![], vec![], None);
+        let custom = vec![
+            header("user-agent", "custom-agent/1"),
+            header("Accept", "text/plain"),
+            header("authorization", "Token abc"),
+        ];
+        let req = build_request(
+            "https://api.example.com",
+            &operation,
+            &HashMap::new(),
+            None,
+            Some("secret-123"),
+            &custom,
+        )
+        .unwrap();
+
+        assert!(
+            req.headers
+                .iter()
+                .any(|(k, v)| k == "user-agent" && v == "custom-agent/1")
+        );
+        assert!(
+            req.headers
+                .iter()
+                .any(|(k, v)| k == "Accept" && v == "text/plain")
+        );
+        assert!(
+            req.headers
+                .iter()
+                .any(|(k, v)| k == "authorization" && v == "Token abc")
+        );
+        assert!(
+            !req.headers
+                .iter()
+                .any(|(k, v)| k == "User-Agent" && v.starts_with("clining/"))
+        );
+        assert!(
+            !req.headers
+                .iter()
+                .any(|(k, v)| k == "Accept" && v == "application/json")
+        );
+        assert!(
+            !req.headers
+                .iter()
+                .any(|(k, v)| k == "Authorization" && v == "Bearer secret-123")
+        );
+    }
+
+    #[test]
+    fn custom_content_type_replaces_generated_one() {
+        let spec = BodySpec {
+            required: true,
+            content_type: "application/json".to_owned(),
+            description: None,
+            schema: None,
+        };
+        let operation = operation_with("/pets", vec![], vec![], Some(spec));
+        let custom = vec![header("content-type", "text/plain")];
+        let req = build_request(
+            "https://api.example.com",
+            &operation,
+            &HashMap::new(),
+            Some(b"hello"),
+            None,
+            &custom,
+        )
+        .unwrap();
+        assert_eq!(
+            req.headers
+                .iter()
+                .filter(|(k, _)| k.eq_ignore_ascii_case("content-type"))
+                .map(|(_, v)| v.as_str())
+                .collect::<Vec<_>>(),
+            vec!["text/plain"]
+        );
+        assert_eq!(req.body, Some(b"hello".to_vec()));
+    }
+
+    #[test]
+    fn repeated_custom_names_remain_separate_in_input_order() {
+        let operation = operation_with("/pets", vec![], vec![], None);
+        let custom = vec![header("X-Thing", "first"), header("x-thing", "second")];
+        let req = build_request(
+            "https://api.example.com",
+            &operation,
+            &HashMap::new(),
+            None,
+            None,
+            &custom,
+        )
+        .unwrap();
+        let values: Vec<&str> = req
+            .headers
+            .iter()
+            .filter(|(k, _)| k.eq_ignore_ascii_case("x-thing"))
+            .map(|(_, v)| v.as_str())
+            .collect();
+        assert_eq!(values, vec!["first", "second"]);
+    }
+
+    #[test]
+    fn empty_custom_headers_leave_generated_list_unchanged() {
+        let operation = operation_with("/pets", vec![], vec![], None);
+        let baseline = build(
+            "https://api.example.com",
+            &operation,
+            &HashMap::new(),
+            None,
+            None,
+        )
+        .unwrap();
+        let with_custom = build_request(
+            "https://api.example.com",
+            &operation,
+            &HashMap::new(),
+            None,
+            None,
+            &[],
+        )
+        .unwrap();
+        assert_eq!(with_custom.headers, baseline.headers);
+    }
+
+    #[test]
+    fn denylisted_custom_header_is_rejected_by_the_builder() {
+        let operation = operation_with("/pets", vec![], vec![], None);
+        let custom = vec![header("cOnNeCtIoN", "close")];
+        let err = build_request(
+            "https://api.example.com",
+            &operation,
+            &HashMap::new(),
+            None,
+            None,
+            &custom,
+        )
+        .unwrap_err();
+        assert!(matches!(err, DomainError::Header { .. }), "{err}");
+        assert!(!err.to_string().contains("close"), "{err}");
     }
 }
