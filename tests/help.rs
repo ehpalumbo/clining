@@ -239,6 +239,31 @@ fn command_help_lists_contentless_response_status_codes() {
 }
 
 #[test]
+fn command_help_documents_custom_headers_without_sending() {
+    let dir = temp_dir("help-headers");
+    // Port 1 is not serving HTTP; a request attempt would fail and exit 1.
+    install(&dir, "pets", Some("http://127.0.0.1:1"));
+
+    let out = run_cli(&dir, &["pets", "pets", "get-pet", "--help"], None);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        out.stderr.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("-H, --clining-header <HEADER>"), "{stdout}");
+    assert!(
+        stdout.contains("Custom header as 'Name: value'"),
+        "{stdout}"
+    );
+}
+
+#[test]
 fn command_help_does_not_send_a_request() {
     let dir = temp_dir("help-read-only");
     // Port 1 is not serving HTTP; a request attempt would fail and exit 1.

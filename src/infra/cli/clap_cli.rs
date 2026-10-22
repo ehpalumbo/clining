@@ -11,8 +11,16 @@ use crate::application::api_invocation::ApiInvocationService;
 use crate::application::api_model::ApiModelService;
 use crate::application::auth::auth_from_options;
 use crate::domain::errors::DomainError;
+use crate::domain::headers::CustomHeader;
 use crate::domain::model::{ApiInvocationRequest, ApiModel, ApiOperation, ApiOperationGroup};
 use crate::infra::cli::help::{command_after_help, param_help_text};
+
+/// Internal clap argument ID for custom headers. Kebab-casing never emits
+/// `_`, so this cannot collide with a generated parameter ID.
+const CUSTOM_HEADER_ARG_ID: &str = "clining_header";
+/// Long name for the custom-header flag when the operation does not claim it.
+const CUSTOM_HEADER_LONG: &str = "clining-header";
+const CUSTOM_HEADER_HELP: &str = "Custom header as 'Name: value' (repeatable; sends separate lines and overrides generated headers).";
 
 /// Builds the full CLI command tree: the `install` subcommand plus, when a
 /// model is provided, the installed API as a nested subcommand tree. Without a
@@ -146,12 +154,34 @@ fn api_command(model: &ApiModel) -> Command {
                 }
                 command_cmd = command_cmd.arg(arg);
             }
+            let mut custom_header_arg = Arg::new(CUSTOM_HEADER_ARG_ID)
+                .short('H')
+                .value_name("HEADER")
+                .action(ArgAction::Append)
+                .num_args(1)
+                .help(CUSTOM_HEADER_HELP);
+            // If an API parameter owns the long name, keep it for the API and
+            // expose the custom-header flag as `-H` only.
+            if !operation_claims_clining_header(operation) {
+                custom_header_arg = custom_header_arg.long(CUSTOM_HEADER_LONG);
+            }
+            command_cmd = command_cmd.arg(custom_header_arg);
             command_cmd = command_cmd.after_long_help(command_after_help(model, operation));
             group_cmd = group_cmd.subcommand(command_cmd);
         }
         api = api.subcommand(group_cmd);
     }
     api
+}
+
+/// Returns whether a path or query parameter already owns the long name used
+/// by the custom-header flag.
+fn operation_claims_clining_header(operation: &ApiOperation) -> bool {
+    operation
+        .path_params
+        .iter()
+        .chain(&operation.query_params)
+        .any(|param| param.canonical_name == CUSTOM_HEADER_LONG)
 }
 
 /// Long help for an operation command: the summary followed by the operation
@@ -353,6 +383,25 @@ impl CliApp {
                 params.insert(param.canonical_name.clone(), values.cloned().collect());
             }
         }
+        // Parse and validate custom headers before reading stdin so malformed
+        // input fails fast without consuming the body or attempting a request.
+        let headers = match command_matches.and_then(|m| m.get_many::<String>(CUSTOM_HEADER_ARG_ID))
+        {
+            Some(values) => {
+                let mut headers = Vec::new();
+                for raw in values {
+                    match CustomHeader::parse(raw) {
+                        Ok(header) => headers.push(header),
+                        Err(err) => {
+                            eprintln!("error: {err}");
+                            return ExitCode::FAILURE;
+                        }
+                    }
+                }
+                headers
+            }
+            None => Vec::new(),
+        };
         // Read the request body from stdin, if any.
         let body = read_stdin_body();
         // Invoke the command using the service, passing the resolved request.
@@ -364,6 +413,7 @@ impl CliApp {
             params,
             body,
             model.auth.clone(),
+            headers,
         );
         let response = match self.invoker.invoke(&invocation) {
             Ok(response) => response,
@@ -1060,5 +1110,167 @@ mod tests {
         assert_eq!(status_text(200), " OK");
         assert_eq!(status_text(404), " Not Found");
         assert_eq!(status_text(599), "");
+    }
+
+    fn get_pet_command(model: &ApiModel) -> Command {
+        build_cli_command(Some(model))
+            .find_subcommand("pets")
+            .unwrap()
+            .find_subcommand("pets")
+            .unwrap()
+            .find_subcommand("get-pet")
+            .unwrap()
+            .clone()
+    }
+
+    #[test]
+    fn custom_header_flag_is_registered_once_and_collects_in_order() {
+        let model = sample_model();
+        let help_cmd = get_pet_command(&model);
+        help_cmd.clone().debug_assert();
+        let help = help_cmd.clone().render_long_help().to_string();
+        assert!(help.contains("-H, --clining-header <HEADER>"), "{help}");
+
+        let cmd = build_cli_command(Some(&model));
+        cmd.clone().debug_assert();
+        let matches = cmd
+            .try_get_matches_from([
+                "clining",
+                "pets",
+                "pets",
+                "get-pet",
+                "--pet-id",
+                "42",
+                "-H",
+                "A: 1",
+                "--clining-header",
+                "B: 2",
+            ])
+            .unwrap();
+        let command = matches
+            .subcommand_matches("pets")
+            .unwrap()
+            .subcommand_matches("pets")
+            .unwrap()
+            .subcommand_matches("get-pet")
+            .unwrap();
+        assert_eq!(
+            command
+                .get_many::<String>(CUSTOM_HEADER_ARG_ID)
+                .unwrap()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            vec!["A: 1", "B: 2"]
+        );
+    }
+
+    #[test]
+    fn api_parameter_named_header_keeps_long_name_and_custom_flag_still_works() {
+        let mut model = sample_model();
+        model.operation_groups[0].operations[0].query_params[0].canonical_name =
+            "header".to_owned();
+        model.operation_groups[0].operations[0].query_params[0].name = "header".to_owned();
+
+        let cmd = get_pet_command(&model);
+        cmd.clone().debug_assert();
+        let help = cmd.clone().render_long_help().to_string();
+        assert!(help.contains("--header"), "{help}");
+        assert!(help.contains("-H, --clining-header <HEADER>"), "{help}");
+
+        let full = build_cli_command(Some(&model));
+        full.clone().debug_assert();
+        let matches = full
+            .try_get_matches_from([
+                "clining",
+                "pets",
+                "pets",
+                "get-pet",
+                "--pet-id",
+                "42",
+                "--header",
+                "api-value",
+                "-H",
+                "X-Custom: yes",
+            ])
+            .unwrap();
+        let command = matches
+            .subcommand_matches("pets")
+            .unwrap()
+            .subcommand_matches("pets")
+            .unwrap()
+            .subcommand_matches("get-pet")
+            .unwrap();
+        assert_eq!(
+            command
+                .get_many::<String>("header")
+                .unwrap()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            vec!["api-value"]
+        );
+        assert_eq!(
+            command
+                .get_many::<String>(CUSTOM_HEADER_ARG_ID)
+                .unwrap()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            vec!["X-Custom: yes"]
+        );
+    }
+
+    #[test]
+    fn api_parameter_named_clining_header_keeps_long_name_and_h_remains_short_only() {
+        let mut model = sample_model();
+        model.operation_groups[0].operations[0].query_params[0].canonical_name =
+            CUSTOM_HEADER_LONG.to_owned();
+        model.operation_groups[0].operations[0].query_params[0].name =
+            CUSTOM_HEADER_LONG.to_owned();
+
+        let cmd = get_pet_command(&model);
+        cmd.clone().debug_assert();
+        let help = cmd.clone().render_long_help().to_string();
+        assert!(help.contains("--clining-header"), "{help}");
+        assert!(help.contains("-H <HEADER>"), "{help}");
+        assert!(!help.contains("-H, --clining-header"), "{help}");
+
+        let full = build_cli_command(Some(&model));
+        full.clone().debug_assert();
+        let matches = full
+            .try_get_matches_from([
+                "clining",
+                "pets",
+                "pets",
+                "get-pet",
+                "--pet-id",
+                "42",
+                "--clining-header",
+                "api-value",
+                "-H",
+                "X-Custom: yes",
+            ])
+            .unwrap();
+        let command = matches
+            .subcommand_matches("pets")
+            .unwrap()
+            .subcommand_matches("pets")
+            .unwrap()
+            .subcommand_matches("get-pet")
+            .unwrap();
+        assert_eq!(
+            command
+                .get_many::<String>(CUSTOM_HEADER_LONG)
+                .unwrap()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            vec!["api-value"]
+        );
+        assert_eq!(
+            command
+                .get_many::<String>(CUSTOM_HEADER_ARG_ID)
+                .unwrap()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            vec!["X-Custom: yes"]
+        );
     }
 }

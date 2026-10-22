@@ -78,6 +78,41 @@ fn missing_required_path_param_is_a_clap_error() {
 }
 
 #[test]
+fn invalid_custom_header_is_rejected_before_network() {
+    let dir = temp_dir("invalid-header");
+    install(&dir, "pets", Some("http://127.0.0.1:9"));
+
+    let invoke = run_cli(
+        &dir,
+        &[
+            "pets",
+            "pets",
+            "get-pet",
+            "--pet-id",
+            "42",
+            "-H",
+            "Connection: keep-alive",
+        ],
+        None,
+    );
+    assert!(!invoke.status.success());
+    assert_eq!(invoke.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&invoke.stderr);
+    assert_eq!(
+        stderr
+            .lines()
+            .filter(|line| line.starts_with("error:"))
+            .count(),
+        1,
+        "{stderr}"
+    );
+    assert!(stderr.contains("invalid header:"), "{stderr}");
+    assert!(!stderr.contains("keep-alive"), "{stderr}");
+    assert!(!stderr.contains("network error"), "{stderr}");
+    assert!(invoke.stdout.is_empty());
+}
+
+#[test]
 fn reinstall_overwrites_existing_model() {
     let dir = temp_dir("reinstall");
     install(&dir, "pets", None);
