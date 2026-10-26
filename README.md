@@ -28,6 +28,8 @@ make build          # release build into target/release/clining
 make install        # copies the binary to ~/.local/bin/clining (PREFIX overridable)
 ```
 
+`make dist` additionally requires `jq`: the Makefile reads the crate version through `cargo metadata`.
+
 ## Releasing
 
 1. Bump `package.version` in `Cargo.toml`, let the next `cargo` command refresh `Cargo.lock`, and commit both.
