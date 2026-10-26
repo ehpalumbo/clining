@@ -14,6 +14,12 @@ Repository-wide architectural guidance for the clining codebase.
 
 - [Architecture Overview](architecture/overview.md) - The concentric domain/application/infra layering with inward-only dependencies, application-owned ports, key domain rules, and the install/invoke data flows.
 
+## Workflows
+
+Operational processes that keep the repository shippable.
+
+- [Release Process](workflows/releases.md) - How tag pushes and manual dispatches run the quality gate, package the binary, and publish GitHub Releases.
+
 ## Decision Records
 
 Architecture decision records capturing the context, choices, and trade-offs behind structural changes to the codebase.

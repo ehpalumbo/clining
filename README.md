@@ -6,6 +6,20 @@
 
 ## Build & Install
 
+### Prebuilt binaries
+
+Each release publishes a Linux x86_64 tarball, so installing does not require a Rust toolchain. Replace `<version>` with the release you want (for example `0.1.0`):
+
+```bash
+gh release download v<version> --repo ehpalumbo/clining -p 'clining-v*.tar.gz'
+tar -xzf clining-v<version>-x86_64-unknown-linux-gnu.tar.gz
+install -Dm755 clining ~/.local/bin/clining
+```
+
+The archive contains only the `clining` binary at its root. GitHub publishes a SHA-256 digest for each release asset; view it with `gh release view v<version> --repo ehpalumbo/clining --json assets`.
+
+### From source
+
 Requires a Rust toolchain (`rustup`; `edition 2024`). From a checkout:
 
 ```bash
@@ -13,6 +27,15 @@ make check          # fmt --check + clippy -D warnings + tests
 make build          # release build into target/release/clining
 make install        # copies the binary to ~/.local/bin/clining (PREFIX overridable)
 ```
+
+`make dist` additionally requires `jq`: the Makefile reads the crate version through `cargo metadata`.
+
+## Releasing
+
+1. Bump `package.version` in `Cargo.toml`, let the next `cargo` command refresh `Cargo.lock`, and commit both.
+2. Run **Actions → Release → Run workflow** on the target commit with that version, or push a matching `v<version>` tag.
+
+The tag and the `Cargo.toml` version must be identical; the workflow refuses to publish otherwise. A version with a pre-release suffix such as `0.1.0-rc.1` is published as a GitHub pre-release. See the [Release Process](docs/workflows/releases.md) for the pipeline, assets, and failure recovery.
 
 ## Usage
 
