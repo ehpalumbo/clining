@@ -1,7 +1,7 @@
 CARGO ?= cargo
 PREFIX ?= ~/.local
 BINDIR = $(DESTDIR)$(PREFIX)/bin
-VERSION ?= $(shell $(CARGO) metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
+VERSION ?= $(shell $(CARGO) metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "clining") | .version')
 TARGET_TRIPLE ?= $(shell rustc -vV | sed -n 's/^host: //p')
 DIST_DIR = dist
 DIST_ASSET = $(DIST_DIR)/clining-v$(VERSION)-$(TARGET_TRIPLE).tar.gz
