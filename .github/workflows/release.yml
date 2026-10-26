@@ -40,9 +40,17 @@ jobs:
           if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
             VERSION="$INPUT_VERSION"
             TAG="v$VERSION"
-            if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null; then
+            # git ls-remote --exit-code returns 2 when the ref is absent; any
+            # other failure (e.g. a network error) must not be mistaken for
+            # "tag does not exist".
+            rc=0
+            git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null || rc=$?
+            if [ "$rc" -eq 0 ]; then
               echo "::error::Tag $TAG already exists; refusing to overwrite it."
               exit 1
+            elif [ "$rc" -ne 2 ]; then
+              echo "::error::Could not query remote tags (git ls-remote exited $rc)."
+              exit "$rc"
             fi
           else
             TAG="$REF_NAME"
