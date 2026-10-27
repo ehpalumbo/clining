@@ -123,6 +123,70 @@ fn repeated_same_name_headers_send_one_line_per_occurrence_in_order() {
 }
 
 #[test]
+fn empty_custom_header_value_reaches_server() {
+    let dir = temp_dir("headers-empty-value");
+    let server = MockServer::start(1);
+    let base = server_base(&server);
+    install(&dir, "pets", Some(&base));
+
+    let invoke = run_cli(
+        &dir,
+        &[
+            "pets", "pets", "get-pet", "--pet-id", "42", "-H", "X-Empty:",
+        ],
+        None,
+    );
+    assert!(
+        invoke.status.success(),
+        "{}",
+        String::from_utf8_lossy(&invoke.stderr)
+    );
+
+    let sent = request_text(&server.request(0));
+    assert_eq!(header_values(&sent, "x-empty"), vec![""]);
+    server.handle.join().unwrap();
+}
+
+#[test]
+fn duplicate_authorization_headers_stay_separate_lines() {
+    // Pins the duplicate-lines wire format for Authorization specifically:
+    // two occurrences are sent as two header lines, never collapsed or
+    // comma-joined, and never merged with a resolved bearer token.
+    let dir = temp_dir("headers-duplicate-auth");
+    let server = MockServer::start(1);
+    let base = server_base(&server);
+    install(&dir, "pets", Some(&base));
+
+    let invoke = run_cli(
+        &dir,
+        &[
+            "pets",
+            "pets",
+            "get-pet",
+            "--pet-id",
+            "42",
+            "-H",
+            "Authorization: Token first",
+            "-H",
+            "authorization: Token second",
+        ],
+        None,
+    );
+    assert!(
+        invoke.status.success(),
+        "{}",
+        String::from_utf8_lossy(&invoke.stderr)
+    );
+
+    let sent = request_text(&server.request(0));
+    assert_eq!(
+        header_values(&sent, "authorization"),
+        vec!["Token first", "Token second"]
+    );
+    server.handle.join().unwrap();
+}
+
+#[test]
 fn custom_generated_headers_win_without_duplication() {
     let dir = temp_dir("headers-precedence");
     let server = MockServer::start(1);

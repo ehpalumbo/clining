@@ -24,7 +24,7 @@ pub fn build_request(
     token: Option<&str>,
     custom_headers: &[CustomHeader],
 ) -> Result<HttpRequest, DomainError> {
-    let mut body = body.filter(|b| !b.is_empty());
+    let body = body.filter(|b| !b.is_empty());
     let url = build_url(base_url, operation, values)?;
 
     let mut headers: Vec<(String, String)> = vec![
@@ -59,7 +59,6 @@ pub fn build_request(
                     message: format!("command '{}' declares no request body", operation.name),
                 });
             }
-            body = None;
         }
     }
 
