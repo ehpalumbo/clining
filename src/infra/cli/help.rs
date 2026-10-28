@@ -418,17 +418,18 @@ fn has_structure(schema: &SchemaSpec) -> bool {
     )
 }
 
-/// Builds a visible schema entry: `label: type`, required marker, description,
-/// and compact metadata. Array items have no label because the enclosing
-/// brackets already identify them.
+/// Builds a visible schema entry: `label: type`, required marker and compact
+/// metadata, followed by the description separated by an em dash (matching the
+/// body/response header lines). Array items have no label because the
+/// enclosing brackets already identify them.
 fn schema_line(label: &str, type_label: &str, required: bool, meta: SchemaMeta) -> String {
     let mut line = schema_head_line(label, type_label, required);
-    if let Some(description) = &meta.description {
-        let _ = write!(line, ": {description}");
-    }
     let details = meta.details();
     if !details.is_empty() {
         let _ = write!(line, " ({})", details.join("; "));
+    }
+    if let Some(description) = &meta.description {
+        let _ = write!(line, " — {}", description.trim());
     }
     line
 }
@@ -808,11 +809,11 @@ mod tests {
         );
         assert!(help.contains("Order (object) {"), "{help}");
         assert!(
-            help.contains("id: integer (required): Order id (minimum: 1)"),
+            help.contains("id: integer (required) (minimum: 1) — Order id"),
             "{help}"
         );
         assert!(
-            help.contains("quantity: integer: Number of units (minimum: 1; default: 1)"),
+            help.contains("quantity: integer (minimum: 1; default: 1) — Number of units"),
             "{help}"
         );
         assert!(
@@ -852,7 +853,7 @@ mod tests {
 
         assert!(help.contains("owner: object {"), "{help}");
         assert!(
-            help.contains("name: string (required): Owner name"),
+            help.contains("name: string (required) — Owner name"),
             "{help}"
         );
         assert!(!help.contains(r#"{"type":"string"}"#), "{help}");
@@ -967,7 +968,7 @@ mod tests {
         let help = command_after_help(&model, &operation(vec![], vec![], Some(body), vec![]));
 
         assert!(help.contains("Alias (Pet, object) {"), "{help}");
-        assert!(help.contains("id: integer (required): Pet id"), "{help}");
+        assert!(help.contains("id: integer (required) — Pet id"), "{help}");
 
         let param = Param {
             name: "status".to_owned(),
@@ -1048,7 +1049,7 @@ mod tests {
         assert!(help.contains("Extended (allOf) {"), "{help}");
         assert!(help.contains("part 1: Base (object) {"), "{help}");
         assert!(
-            help.contains("name: string (required): Display name"),
+            help.contains("name: string (required) — Display name"),
             "{help}"
         );
     }

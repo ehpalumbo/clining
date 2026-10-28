@@ -1080,7 +1080,7 @@ mod tests {
         let footer = footer.unwrap();
         assert!(footer.contains("Order (object) {"), "{footer}");
         assert!(
-            footer.contains("id: integer (required): Order id (minimum: 1)"),
+            footer.contains("id: integer (required) (minimum: 1) — Order id"),
             "{footer}"
         );
         assert!(footer.contains("Responses:"), "{footer}");
