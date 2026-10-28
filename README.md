@@ -20,13 +20,15 @@ The archive contains only the `clining` binary at its root. GitHub publishes a S
 
 ### From source
 
-Requires a Rust toolchain (`rustup`; `edition 2024`). From a checkout:
+Supports Linux and Windows (x86_64). Requires a Rust toolchain (`rustup`; `edition 2024`). From a checkout:
 
 ```bash
 make check          # fmt --check + clippy -D warnings + tests
 make build          # release build into target/release/clining
 make install        # copies the binary to ~/.local/bin/clining (PREFIX overridable)
 ```
+
+On Windows without `make`, run `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`, and `cargo build --release` directly. (Prebuilt Windows binaries will be published in a future release; tracked in #13).
 
 `make dist` additionally requires `jq`: the Makefile reads the crate version through `cargo metadata`.
 
@@ -101,7 +103,7 @@ request.
 
 Models are plain JSON files, one per API:
 
-- Root: `$CLINING_DIR` if set, otherwise `~/.clining/`.
+- Root: `$CLINING_DIR` if set, otherwise `~/.clining/` (or `%USERPROFILE%\.clining` on Windows).
 - File: `<name>.json`.
 - Writes are atomic (temp file + rename); a corrupt file surfaces as an "invalid stored model" error, never as not-found.
 
