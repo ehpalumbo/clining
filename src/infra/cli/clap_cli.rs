@@ -1,5 +1,6 @@
-//! clap CLI: a single builder-API command tree — a static `install` subcommand
-//! plus a per-API subcommand tree added once the installed model is loaded.
+//! clap CLI: a single builder-API command tree — a static `api` management
+//! group (currently holding `install`) plus a per-API subcommand tree added
+//! once the installed model is loaded.
 
 use std::collections::HashMap;
 use std::io::{IsTerminal, Read, Write};
@@ -22,21 +23,53 @@ const CUSTOM_HEADER_ARG_ID: &str = "clining_header";
 const CUSTOM_HEADER_LONG: &str = "clining-header";
 const CUSTOM_HEADER_HELP: &str = "Custom header as 'Name: value' (repeatable; sends separate lines and overrides generated headers).";
 
-/// Builds the full CLI command tree: the `install` subcommand plus, when a
-/// model is provided, the installed API as a nested subcommand tree. Without a
-/// model, a placeholder `<api>` entry keeps the invocation shape visible in
-/// `clining --help`.
+/// Builds the full CLI command tree: the static `api` management group plus,
+/// when a model is provided, the installed API as a nested subcommand tree.
+/// Without a model, a placeholder `<api>` entry keeps the invocation shape
+/// visible in `clining --help`.
 pub fn build_cli_command(model: Option<&ApiModel>) -> Command {
     let top = Command::new("clining")
         .version(env!("CARGO_PKG_VERSION"))
         .about("Expose OpenAPI-documented HTTP APIs as local CLI commands")
         .disable_help_subcommand(true)
         .subcommand_required(true)
-        .subcommand(install_command());
+        .subcommand(api_group());
     match model {
         Some(model) => top.subcommand(api_command(model)),
         None => top.subcommand(api_placeholder_command()),
     }
+}
+
+/// Management verbs of the top-level `api` group. The single table feeds both
+/// the static clap tree (help) and the dispatch membership check, so help and
+/// routing cannot drift. Future management commands (`list`, `edit`, `remove`)
+/// become table entries.
+const MANAGEMENT_VERBS: &[&str] = &["install"];
+
+/// Returns whether `verb` is a management verb of the `api` group.
+fn management_verb(verb: Option<&str>) -> bool {
+    verb.is_some_and(|verb| MANAGEMENT_VERBS.contains(&verb))
+}
+
+/// Builds the `verb` command for the `api` group from the verb table.
+fn management_verb_command(verb: &str) -> Command {
+    match verb {
+        "install" => install_command(),
+        _ => unreachable!("unknown management verb: {verb}"),
+    }
+}
+
+/// Builds the static `api` management group containing the verb table's
+/// subcommands.
+fn api_group() -> Command {
+    let mut group = Command::new("api")
+        .about("Manage installed API models")
+        .disable_help_subcommand(true)
+        .subcommand_required(true);
+    for verb in MANAGEMENT_VERBS {
+        group = group.subcommand(management_verb_command(verb));
+    }
+    group
 }
 
 /// Builds the static `install` subcommand with the builder API.
@@ -107,8 +140,8 @@ fn resolve_token_file_path(path: &str) -> Result<String, DomainError> {
 }
 
 /// Stand-in for the dynamic per-API subcommand, shown when no model is loaded.
-/// The static path only parses flags, `install`, or no arguments, so the
-/// placeholder is never actually matched.
+/// The static path only parses the `api` group, flags, or no arguments, so
+/// the placeholder is never actually matched.
 fn api_placeholder_command() -> Command {
     Command::new("<api>").about("Commands for an installed API: clining <name> <group> <command>")
 }
@@ -207,20 +240,37 @@ fn group_about(group: &ApiOperationGroup) -> String {
     }
 }
 
-/// Top-level dispatch decision based on the first positional argument.
-enum Action {
-    Install(Vec<String>),
-    Invoke(Vec<String>),
+/// Top-level routing decision: which parse tree the arguments belong to.
+/// The variants say which parse tree handles `argv` — not what executes —
+/// because help rendering can happen through clap on any route (`clining
+/// pets --help` already renders help via `Invocation`).
+enum Route {
+    /// Static `api` management group parse tree.
+    Management(Vec<String>),
+    /// Runtime-built dynamic per-API parse tree.
+    Invocation(Vec<String>),
+    /// Top-level parse tree: help only, plus clap usage errors.
     Static(Vec<String>),
 }
 
-/// Dispatches the CLI arguments to the appropriate action: `install` subcommand,
-/// dynamic per-API command tree, or static help/test tree.
-fn dispatch(argv: &[String]) -> Action {
+/// Routes the CLI arguments by the first positional argument (exact string
+/// compares, mirroring the dispatcher):
+///
+/// - `api` followed by a management verb → `Management`;
+/// - `api` otherwise (`--help`, unknown verbs, bare) → `Static` (group help
+///   or a clap usage error);
+/// - any other non-flag first positional → `Invocation` (this also covers the
+///   root word `install`: there is no top-level install, so it fails as a
+///   not-found model load whose hint points at `clining api install`);
+/// - flags or no arguments at all → `Static`.
+fn dispatch(argv: &[String]) -> Route {
     match argv.get(1).map(String::as_str) {
-        Some("install") => Action::Install(argv.to_vec()),
-        Some(first) if !first.starts_with('-') => Action::Invoke(argv.to_vec()),
-        _ => Action::Static(argv.to_vec()),
+        Some("api") if management_verb(argv.get(2).map(String::as_str)) => {
+            Route::Management(argv.to_vec())
+        }
+        Some("api") => Route::Static(argv.to_vec()),
+        Some(first) if !first.starts_with('-') => Route::Invocation(argv.to_vec()),
+        _ => Route::Static(argv.to_vec()),
     }
 }
 
@@ -239,13 +289,14 @@ impl CliApp {
     pub fn run(&self) -> ExitCode {
         let args: Vec<String> = std::env::args().collect();
         match dispatch(&args) {
-            Action::Install(args) => self.run_install(&args),
-            Action::Invoke(args) => self.run_invoke(&args),
-            Action::Static(args) => self.run_static(&args),
+            Route::Management(args) => self.run_install(&args),
+            Route::Invocation(args) => self.run_invoke(&args),
+            Route::Static(args) => self.run_static(&args),
         }
     }
 
-    /// Runs the `install` subcommand, which parses the spec and persists the model.
+    /// Runs the `api install` subcommand, which parses the spec and persists
+    /// the model.
     fn run_install(&self, args: &[String]) -> ExitCode {
         let matches = match build_cli_command(None).try_get_matches_from(args) {
             Ok(matches) => matches,
@@ -255,8 +306,9 @@ impl CliApp {
             }
         };
         let install = matches
-            .subcommand_matches("install")
-            .expect("install subcommand is required");
+            .subcommand_matches("api")
+            .and_then(|api| api.subcommand_matches("install"))
+            .expect("api install subcommand is required");
         let name = install.get_one::<String>("name").expect("name is required");
         let spec_source = install
             .get_one::<String>("spec_source")
@@ -310,7 +362,7 @@ impl CliApp {
             Err(err) => {
                 match err {
                     DomainError::NotFound { .. } => eprintln!(
-                        "error: {err}; install it first with 'clining install <name> <spec>'"
+                        "error: {err}; install it first with 'clining api install <name> <spec>'"
                     ),
                     _ => eprintln!("error: {err}"),
                 }
@@ -684,6 +736,7 @@ mod tests {
         let matches = cmd
             .try_get_matches_from([
                 "clining",
+                "api",
                 "install",
                 "pets",
                 "spec.json",
@@ -691,7 +744,11 @@ mod tests {
                 "http://localhost:8080",
             ])
             .unwrap();
-        let install = matches.subcommand_matches("install").unwrap();
+        let install = matches
+            .subcommand_matches("api")
+            .unwrap()
+            .subcommand_matches("install")
+            .unwrap();
         assert_eq!(
             install.get_one::<String>("name").map(String::as_str),
             Some("pets")
@@ -710,9 +767,13 @@ mod tests {
     fn install_args_parse_without_base_url() {
         let cmd = build_cli_command(None);
         let matches = cmd
-            .try_get_matches_from(["clining", "install", "pets", "spec.json"])
+            .try_get_matches_from(["clining", "api", "install", "pets", "spec.json"])
             .unwrap();
-        let install = matches.subcommand_matches("install").unwrap();
+        let install = matches
+            .subcommand_matches("api")
+            .unwrap()
+            .subcommand_matches("install")
+            .unwrap();
         assert_eq!(
             install.get_one::<String>("name").map(String::as_str),
             Some("pets")
@@ -732,6 +793,7 @@ mod tests {
         let matches = cmd
             .try_get_matches_from([
                 "clining",
+                "api",
                 "install",
                 "pets",
                 "spec.json",
@@ -739,7 +801,11 @@ mod tests {
                 "MY_TOKEN",
             ])
             .unwrap();
-        let install = matches.subcommand_matches("install").unwrap();
+        let install = matches
+            .subcommand_matches("api")
+            .unwrap()
+            .subcommand_matches("install")
+            .unwrap();
         assert_eq!(
             install.get_one::<String>("token_env").map(String::as_str),
             Some("MY_TOKEN")
@@ -760,6 +826,7 @@ mod tests {
         let matches = cmd
             .try_get_matches_from([
                 "clining",
+                "api",
                 "install",
                 "pets",
                 "spec.json",
@@ -767,7 +834,11 @@ mod tests {
                 "/tmp/token.txt",
             ])
             .unwrap();
-        let install = matches.subcommand_matches("install").unwrap();
+        let install = matches
+            .subcommand_matches("api")
+            .unwrap()
+            .subcommand_matches("install")
+            .unwrap();
         assert_eq!(
             install.get_one::<String>("token_file").map(String::as_str),
             Some("/tmp/token.txt")
@@ -781,6 +852,7 @@ mod tests {
         let err = cmd
             .try_get_matches_from([
                 "clining",
+                "api",
                 "install",
                 "pets",
                 "spec.json",
@@ -803,6 +875,8 @@ mod tests {
     fn install_help_documents_token_flags() {
         let mut cmd = build_cli_command(None);
         let install = cmd
+            .find_subcommand_mut("api")
+            .expect("api group")
             .find_subcommand_mut("install")
             .expect("install subcommand");
         let help = install.render_help().to_string();
@@ -839,13 +913,29 @@ mod tests {
     }
 
     #[test]
-    fn static_help_lists_install_and_api_placeholder() {
+    fn static_help_lists_api_group_with_install_and_placeholder() {
         let mut cmd = build_cli_command(None);
         cmd.clone().debug_assert();
-        let help = cmd.render_help().to_string();
-        assert!(help.contains("install"), "{help}");
-        assert!(help.contains("<api>"), "{help}");
-        assert!(help.contains("Commands for an installed API"), "{help}");
+        let top_help = cmd.render_help().to_string();
+        assert!(top_help.contains("api"), "{top_help}");
+        assert!(
+            top_help.contains("Manage installed API models"),
+            "{top_help}"
+        );
+        assert!(top_help.contains("<api>"), "{top_help}");
+        assert!(
+            top_help.contains("Commands for an installed API"),
+            "{top_help}"
+        );
+
+        let api_help = cmd
+            .find_subcommand_mut("api")
+            .expect("api group")
+            .find_subcommand_mut("install")
+            .expect("install beneath api")
+            .render_help()
+            .to_string();
+        assert!(api_help.contains("Install an API"), "{api_help}");
     }
 
     #[test]
@@ -1089,20 +1179,37 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_routes_by_first_positional() {
+    fn dispatch_routes_by_parse_tree() {
+        let args: Vec<String> = vec![
+            "clining".into(),
+            "api".into(),
+            "install".into(),
+            "pets".into(),
+            "spec.json".into(),
+        ];
+        assert!(matches!(dispatch(&args), Route::Management(_)));
+        for statics in [
+            vec!["clining", "api", "--help"],
+            vec!["clining", "api"],
+            vec!["clining", "api", "frobnicate"],
+            vec!["clining", "--help"],
+            vec!["clining"],
+        ] {
+            let args: Vec<String> = statics.iter().map(|s| String::from(*s)).collect();
+            assert!(matches!(dispatch(&args), Route::Static(_)), "{statics:?}");
+        }
+        // The root word `install` is an ordinary (absent) API name now: it
+        // routes to the invocation tree and fails as not-found with the
+        // `clining api install` hint.
         let args: Vec<String> = vec![
             "clining".into(),
             "install".into(),
             "pets".into(),
             "spec.json".into(),
         ];
-        assert!(matches!(dispatch(&args), Action::Install(_)));
+        assert!(matches!(dispatch(&args), Route::Invocation(_)));
         let args: Vec<String> = vec!["clining".into(), "pets".into(), "pets".into()];
-        assert!(matches!(dispatch(&args), Action::Invoke(_)));
-        let args: Vec<String> = vec!["clining".into(), "--help".into()];
-        assert!(matches!(dispatch(&args), Action::Static(_)));
-        let args: Vec<String> = vec!["clining".into()];
-        assert!(matches!(dispatch(&args), Action::Static(_)));
+        assert!(matches!(dispatch(&args), Route::Invocation(_)));
     }
 
     #[test]

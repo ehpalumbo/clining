@@ -21,10 +21,14 @@ fn unknown_api_in_empty_store_is_helpful() {
         "{stderr}"
     );
     assert!(stderr.contains("install it first"), "{stderr}");
+    assert!(
+        stderr.contains("clining api install <name> <spec>"),
+        "{stderr}"
+    );
 }
 
 #[test]
-fn zero_args_prints_help_and_exits_nonzero() {
+fn zero_args_prints_help_listing_and_exits_nonzero() {
     let dir = temp_dir("zero-args");
     fs::create_dir_all(&dir).unwrap();
 
@@ -33,7 +37,7 @@ fn zero_args_prints_help_and_exits_nonzero() {
     assert_eq!(out.status.code(), Some(2));
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("Usage"), "{stderr}");
-    assert!(stderr.contains("install"), "{stderr}");
+    assert!(stderr.contains("api"), "{stderr}");
 }
 
 #[test]
@@ -129,7 +133,7 @@ fn spec_source_not_found_is_descriptive() {
     let dir = temp_dir("spec-missing");
     let invoke = run_cli(
         &dir,
-        &["install", "pets", "/definitely/not/here/spec.json"],
+        &["api", "install", "pets", "/definitely/not/here/spec.json"],
         None,
     );
     assert!(!invoke.status.success());
@@ -137,4 +141,101 @@ fn spec_source_not_found_is_descriptive() {
     let stderr = String::from_utf8_lossy(&invoke.stderr);
     assert!(stderr.contains("error:"), "{stderr}");
     assert!(stderr.contains("spec"), "{stderr}");
+}
+
+#[test]
+fn reserved_name_api_is_rejected_without_persisting() {
+    let dir = temp_dir("reserved-name");
+    let spec = dir.join("spec.json");
+    fs::write(&spec, common::fixture_spec()).unwrap();
+
+    let out = run_cli(
+        &dir,
+        &["api", "install", "api", spec.to_str().unwrap()],
+        None,
+    );
+    assert!(!out.status.success());
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let error_lines = stderr
+        .lines()
+        .filter(|line| line.starts_with("error:"))
+        .count();
+    assert_eq!(error_lines, 1, "{stderr}");
+    assert!(
+        stderr.contains("reserved command group name 'api'"),
+        "{stderr}"
+    );
+    assert!(out.stdout.is_empty(), "{:?}", out.stdout);
+    assert!(!dir.join("api.json").exists(), "nothing must be persisted");
+}
+
+#[test]
+fn api_group_help_lists_install_and_exits_zero() {
+    let dir = temp_dir("api-group-help");
+
+    let out = run_cli(&dir, &["api", "--help"], None);
+    assert!(out.status.success());
+    assert_eq!(out.status.code(), Some(0));
+    assert!(
+        out.stderr.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("install"), "{stdout}");
+    assert!(stdout.contains("Manage installed API models"), "{stdout}");
+}
+
+#[test]
+fn api_unknown_verb_is_a_clap_usage_error() {
+    let dir = temp_dir("api-unknown-verb");
+
+    let out = run_cli(&dir, &["api", "frobnicate"], None);
+    assert!(!out.status.success());
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("Usage"), "{stderr}");
+    assert!(out.stdout.is_empty(), "{:?}", out.stdout);
+}
+
+#[test]
+fn bare_api_is_a_clap_usage_error() {
+    let dir = temp_dir("api-bare");
+
+    let out = run_cli(&dir, &["api"], None);
+    assert!(!out.status.success());
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("Usage"), "{stderr}");
+    assert!(out.stdout.is_empty(), "{:?}", out.stdout);
+}
+
+#[test]
+fn top_level_install_word_treated_as_missing_api_name_with_hint() {
+    let dir = temp_dir("install-migration-hint");
+    let spec = dir.join("spec.json");
+    fs::write(&spec, common::fixture_spec()).unwrap();
+
+    let out = run_cli(&dir, &["install", "pets", spec.to_str().unwrap()], None);
+    assert!(!out.status.success());
+    // Not a usage error (exit 2): there is no top-level install, so the word
+    // `install` is an ordinary missing API name; the hint points at the group.
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let error_lines = stderr
+        .lines()
+        .filter(|line| line.starts_with("error:"))
+        .count();
+    assert_eq!(error_lines, 1, "{stderr}");
+    assert!(
+        stderr.contains("no API installed under the name 'install'"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("clining api install <name> <spec>"),
+        "{stderr}"
+    );
+    assert!(out.stdout.is_empty(), "{:?}", out.stdout);
+    assert!(!dir.join("pets.json").exists(), "nothing must be persisted");
 }

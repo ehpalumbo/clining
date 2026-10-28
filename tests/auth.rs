@@ -27,6 +27,7 @@ fn install_with_token_env(
     run_cli_with_envs(
         dir,
         &[
+            "api",
             "install",
             "pets",
             spec.to_str().unwrap(),
@@ -50,6 +51,7 @@ fn install_with_token_file(
     run_cli(
         dir,
         &[
+            "api",
             "install",
             "pets",
             spec.to_str().unwrap(),
@@ -198,6 +200,7 @@ fn install_rejects_both_token_sources() {
     let out = run_cli(
         &dir,
         &[
+            "api",
             "install",
             "pets",
             spec.to_str().unwrap(),
@@ -222,6 +225,7 @@ fn install_validates_token_source() {
     let out = run_cli(
         &dir,
         &[
+            "api",
             "install",
             "pets",
             spec.to_str().unwrap(),
@@ -339,6 +343,7 @@ fn relative_token_file_is_stored_absolute_and_invokable_from_other_cwd() {
         &store,
         &work_a,
         &[
+            "api",
             "install",
             "pets",
             spec.to_str().unwrap(),

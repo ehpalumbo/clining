@@ -83,7 +83,7 @@ pub fn run_cli_with_envs_in_cwd(
 pub fn install(dir: &Path, name: &str, base_url: Option<&str>) -> Output {
     let spec = dir.join("spec.json");
     fs::write(&spec, fixture_spec()).unwrap();
-    let mut args = vec!["install", name, spec.to_str().unwrap()];
+    let mut args = vec!["api", "install", name, spec.to_str().unwrap()];
     let base = format!(
         "--base-url={}",
         base_url.unwrap_or("https://api.example.com/v1")

@@ -254,5 +254,47 @@ pub fn validate_name(name: &str) -> Result<(), DomainError> {
             reason: "name must not be '.' or '..'".to_owned(),
         });
     }
+    if name == "api" {
+        return Err(DomainError::InvalidName {
+            name: name.to_owned(),
+            reason: "name must not be the reserved command group name 'api'".to_owned(),
+        });
+    }
     Ok(())
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accepts_ordinary_names() {
+        for name in ["pets", "apix", "api-2", "API", "a.b"] {
+            assert!(validate_name(name).is_ok(), "{name}");
+        }
+    }
+
+    #[test]
+    fn rejects_empty_name() {
+        let err = validate_name("").unwrap_err();
+        assert!(err.to_string().contains("must not be empty"), "{err}");
+    }
+
+    #[test]
+    fn rejects_path_separators_and_dot_directories() {
+        for name in ["a/b", "a\\b", ".", ".."] {
+            let err = validate_name(name).unwrap_err();
+            assert!(matches!(err, DomainError::InvalidName { .. }), "{err}");
+        }
+    }
+
+    #[test]
+    fn rejects_the_reserved_api_group_name() {
+        let err = validate_name("api").unwrap_err();
+        assert!(matches!(err, DomainError::InvalidName { .. }), "{err}");
+        assert!(
+            err.to_string()
+                .contains("reserved command group name 'api'"),
+            "{err}"
+        );
+    }
 }

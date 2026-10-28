@@ -42,7 +42,7 @@ The tag and the `Cargo.toml` version must be identical; the workflow refuses to 
 ### Install an API (one-off setup)
 
 ```bash
-clining install <my-api-name> <path-or-uri-to-openapi-json-file> [--base-url <url>] [--token-env <VAR> | --token-file <path>]
+clining api install <my-api-name> <path-or-uri-to-openapi-json-file> [--base-url <url>] [--token-env <VAR> | --token-file <path>]
 ```
 
 The spec source may be a local file path or an `http(s)://` URI. `--base-url` overrides the URL taken from `servers[0].url`. `--token-env` / `--token-file` (mutually exclusive) record where the Bearer token lives; only the reference is stored and the token is resolved at every invocation as `Authorization: Bearer <token>`. Relative `--token-file` paths are stored as absolute at install time. Re-installing an existing name overwrites the stored model (omitting both token flags clears auth).

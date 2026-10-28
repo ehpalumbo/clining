@@ -26,7 +26,7 @@ Platform target: **Linux only**, implemented in **Rust**, organized with **onion
 
 | Command | Meaning |
 | --- | --- |
-| `clining install <name> <path-or-uri> [--base-url <url>] [--token-env <VAR> \| --token-file <path>]` | One-off setup: fetch the spec, parse it, persist the API model with an optional Bearer token reference. |
+| `clining api install <name> <path-or-uri> [--base-url <url>] [--token-env <VAR> \| --token-file <path>]` | One-off setup: fetch the spec, parse it, persist the API model with an optional Bearer token reference. |
 | `clining <name> <group> <command> [--param value]... [-H <header>]... [< body.json]` | Invoke an endpoint, optionally adding custom request headers. |
 | `clining <name> --help` | List command groups for the API. |
 | `clining <name> <group> --help` | List commands in the group. |
@@ -36,7 +36,7 @@ Platform target: **Linux only**, implemented in **Rust**, organized with **onion
 
 ### FR-1 Install
 
-- FR-1.1 `clining install` accepts a spec **source** that is a local file path or an `http(s)://` URI.
+- FR-1.1 `clining api install` accepts a spec **source** that is a local file path or an `http(s)://` URI. Install lives only under the `api` management group; there is no top-level install subcommand.
 - FR-1.2 The spec is parsed as **OpenAPI 3.0.x** JSON. Unsupported versions are rejected with a clear error.
 - FR-1.3 The parsed model is persisted locally (see FR-5). Re-installing an existing name overwrites it.
 - FR-1.4 `--base-url` overrides the base URL taken from `servers[0].url` and is stored in the model.
@@ -51,6 +51,7 @@ Platform target: **Linux only**, implemented in **Rust**, organized with **onion
 - FR-2.4 Duplicate command names within a group are disambiguated with numeric suffixes (`-2`, `-3`, …).
 - FR-2.5 Parameter CLI names are **kebab-cased** for the command line (e.g. `petStatus` → `--pet-status`); the original name is retained in the model so path/query substitution stays correct.
 - FR-2.6 The stored model captures base URL, groups, commands, HTTP method, path template, path/query parameters (original name, CLI name, required flag, and value schema where the spec provides one), the request body spec (content type, required flag, typed schema), and response specs (status code, content type, typed schema).
+- FR-2.7 The install name must not be the reserved static command keyword `api` (exact match); `API`, `apix`, and `api-2` remain valid names.
 
 ### FR-3 Invocation
 
