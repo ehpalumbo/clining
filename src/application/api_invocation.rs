@@ -28,17 +28,29 @@ impl ApiInvocationService {
         &self,
         invocation: &ApiInvocationRequest<'_>,
     ) -> Result<HttpResponse, DomainError> {
-        let token = invocation
-            .auth
-            .as_ref()
-            .map(|auth| resolve_token(self.tokens.as_ref(), auth))
-            .transpose()?;
+        // A custom Authorization header is authoritative: skip token
+        // resolution entirely so the override works even when the stored
+        // token source is unset, empty, or unreadable.
+        let has_custom_authorization = invocation
+            .headers
+            .iter()
+            .any(|header| header.name.eq_ignore_ascii_case("authorization"));
+        let token = if has_custom_authorization {
+            None
+        } else {
+            invocation
+                .auth
+                .as_ref()
+                .map(|auth| resolve_token(self.tokens.as_ref(), auth))
+                .transpose()?
+        };
         let request = build_request(
             &invocation.base_url,
             invocation.operation,
             &invocation.params,
             invocation.body.as_deref(),
             token.as_deref(),
+            &invocation.headers,
         )?;
         self.invoker.send(&request)
     }
@@ -56,6 +68,15 @@ mod tests {
         ApiModel, ApiOperation, ApiOperationGroup, AuthConfig, HttpMethod, HttpRequest,
         ModelVersion, Param,
     };
+
+    use crate::domain::headers::CustomHeader;
+
+    fn custom_header(name: &str, value: &str) -> CustomHeader {
+        CustomHeader {
+            name: name.to_owned(),
+            value: value.to_owned(),
+        }
+    }
 
     fn sample_model() -> ApiModel {
         ApiModel {
@@ -109,6 +130,7 @@ mod tests {
             params,
             body,
             model.auth.clone(),
+            Vec::new(),
         )
     }
 
@@ -248,5 +270,91 @@ mod tests {
         let err = svc.invoke(&request(&model, params, None)).unwrap_err();
         assert!(matches!(err, DomainError::Auth { .. }), "{err}");
         assert!(!*called.borrow());
+    }
+
+    #[test]
+    fn custom_authorization_skips_unresolvable_token_source() {
+        let (svc, captured) = service();
+        let mut model = sample_model();
+        model.auth = Some(AuthConfig::Env {
+            var: "CLINING_TEST_MISSING_VAR_XYZ".to_owned(),
+        });
+        let params = HashMap::from([("pet-id".to_owned(), vec!["42".to_owned()])]);
+        let invocation = ApiInvocationRequest::new(
+            model.base_url.clone(),
+            operation(&model),
+            params,
+            None,
+            model.auth.clone(),
+            vec![custom_header("authorization", "Token override")],
+        );
+
+        let resp = svc.invoke(&invocation).unwrap();
+        assert_eq!(resp.status, 200);
+        let sent = captured.borrow().clone().unwrap();
+        assert!(
+            sent.headers
+                .iter()
+                .any(|(k, v)| k == "authorization" && v == "Token override")
+        );
+        assert!(
+            !sent
+                .headers
+                .iter()
+                .any(|(k, v)| k == "Authorization" && v.starts_with("Bearer ")),
+            "{:?}",
+            sent.headers
+        );
+    }
+
+    #[test]
+    fn custom_authorization_replaces_resolved_bearer_token() {
+        let token_path = "/tmp/fake-invoke-token.txt".to_owned();
+        let tokens = FakeTokens {
+            files: HashMap::from([(token_path.clone(), b"file-secret\n".to_vec())]),
+        };
+        let (svc, captured) = service_with_tokens(tokens);
+        let mut model = sample_model();
+        model.auth = Some(AuthConfig::File { path: token_path });
+        let params = HashMap::from([("pet-id".to_owned(), vec!["42".to_owned()])]);
+        let invocation = ApiInvocationRequest::new(
+            model.base_url.clone(),
+            operation(&model),
+            params,
+            None,
+            model.auth.clone(),
+            vec![custom_header("Authorization", "Basic abc")],
+        );
+
+        svc.invoke(&invocation).unwrap();
+        let sent = captured.borrow().clone().unwrap();
+        let authorization: Vec<&str> = sent
+            .headers
+            .iter()
+            .filter(|(k, _)| k.eq_ignore_ascii_case("authorization"))
+            .map(|(_, v)| v.as_str())
+            .collect();
+        assert_eq!(authorization, vec!["Basic abc"]);
+    }
+
+    #[test]
+    fn custom_non_authorization_header_does_not_skip_token_resolution() {
+        let (svc, _) = service();
+        let mut model = sample_model();
+        model.auth = Some(AuthConfig::Env {
+            var: "CLINING_TEST_MISSING_VAR_XYZ".to_owned(),
+        });
+        let params = HashMap::from([("pet-id".to_owned(), vec!["42".to_owned()])]);
+        let invocation = ApiInvocationRequest::new(
+            model.base_url.clone(),
+            operation(&model),
+            params,
+            None,
+            model.auth.clone(),
+            vec![custom_header("X-Trace", "abc")],
+        );
+
+        let err = svc.invoke(&invocation).unwrap_err();
+        assert!(matches!(err, DomainError::Auth { .. }), "{err}");
     }
 }

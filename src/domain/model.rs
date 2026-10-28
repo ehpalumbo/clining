@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
 
 use crate::domain::errors::DomainError;
+use crate::domain::headers::CustomHeader;
 
 /// Version marker for the persisted model format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -195,6 +196,7 @@ pub struct ApiInvocationRequest<'m> {
     pub params: HashMap<String, Vec<String>>,
     pub body: Option<Vec<u8>>,
     pub auth: Option<AuthConfig>,
+    pub headers: Vec<CustomHeader>,
 }
 
 impl<'m> ApiInvocationRequest<'m> {
@@ -204,6 +206,7 @@ impl<'m> ApiInvocationRequest<'m> {
         params: HashMap<String, Vec<String>>,
         body: Option<Vec<u8>>,
         auth: Option<AuthConfig>,
+        headers: Vec<CustomHeader>,
     ) -> Self {
         Self {
             base_url,
@@ -211,6 +214,7 @@ impl<'m> ApiInvocationRequest<'m> {
             params,
             body,
             auth,
+            headers,
         }
     }
 }

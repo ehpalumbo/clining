@@ -50,7 +50,7 @@ The spec source may be a local file path or an `http(s)://` URI. `--base-url` ov
 ### Invoke endpoints as commands
 
 ```bash
-clining <my-api-name> <command-group> <command> --<param> <value> [--<param> <value>]... [< body-file]
+clining <my-api-name> <command-group> <command> --<param> <value> [--<param> <value>]... [-H "Name: value"]... [< body-file]
 ```
 
 - Path parameters are required; query parameters are optional unless marked required.
@@ -58,6 +58,28 @@ clining <my-api-name> <command-group> <command> --<param> <value> [--<param> <va
 - The request body is read from stdin when the operation declares one.
 - The response body is written to stdout byte-exact; the HTTP status line and response headers go to stderr.
 - Exit code is `0` for 2xx responses and `1` for any non-2xx response. All errors print a one-line `error: ...` to stderr and exit non-zero.
+
+#### Custom request headers
+
+Every endpoint command accepts `-H "Name: value"` or `--clining-header "Name: value"`, repeatable once per header:
+
+```bash
+clining pets pets get-pet --pet-id 42 \
+  -H "X-Request-Id: abc-123" \
+  -H "Accept: application/xml"
+```
+
+- The pair splits at the first `:`; surrounding spaces and tabs are trimmed. Empty values are allowed (`-H "X-Empty:"`).
+- A custom header overrides the generated `User-Agent`, `Accept`, `Content-Type`, or `Authorization` header case-insensitively.
+- Repeating the same name sends one header line per occurrence, in input order (no comma joining, no last-wins collapse).
+- A custom `Authorization` replaces the stored Bearer token and skips token resolution, so it works even when the configured token source is unset or unreadable.
+- Header names must be HTTP tokens. Values may contain only tab and printable ASCII; non-ASCII and control characters (including CR/LF) are rejected.
+- Framing and hop-by-hop headers are rejected: `Content-Length`, `Transfer-Encoding`, `Connection`, `Keep-Alive`, `Proxy-Connection`, `TE`, `Trailer`, `Upgrade`, `Proxy-Authenticate`, and `Proxy-Authorization`.
+- Invalid headers fail with one `error:` line and exit `1` before stdin is read or a request is sent. A missing flag value or unknown flag remains a clap usage error with exit `2`.
+- Headers are command-scoped. There is no config file, header file, environment header, install-time header, or API/group inheritance in v0.
+- If an API path or query parameter itself canonicalizes to `--clining-header`, that parameter keeps the long form and the custom-header flag falls back to `-H` only. An API parameter canonicalized to `--header` is unaffected.
+
+Header values appear in the process argument list, so they may be visible in process listings and shell history. Prefer referencing secrets from the stored Bearer token source when possible; passing literal secrets with `-H` is at your own risk.
 
 ### Discover commands
 
