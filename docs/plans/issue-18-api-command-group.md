@@ -40,13 +40,13 @@ the persisted model format are unchanged — **no data migration**; rollback is 
 - **Domain (`src/domain/model.rs`):** `validate_name` gains one reserved word (`api`); no new types, no outward dependencies.
 - **Infrastructure/CLI (`src/infra/cli/clap_cli.rs`):** a management-verb table shared by tree building and dispatch; the `Route` enum replaces `Action`; the `NotFound` hint copy points at the new command shape.
 - **Application / storage / HTTP:** untouched. `ApiModelService::learn`, the JSON store, and the invoker are command-agnostic.
-- **Tests:** the shared harness helper absorbs most argv churn; new unit + e2e tests pin routing, help shapes, the reserved name, and the hard break.
+- **Tests:** the shared harness helper absorbs most argv churn; new unit + e2e tests pin routing, help shapes, the reserved name, and the not-found migration path for the old top-level command.
 
 ### Assumptions
 
 Adopted from the approved impact analysis without re-negotiation:
 
-1. **Hard break** — top-level `clining install` is removed, no alias. It surfaces as a clap usage error (exit 2): the dispatch arm for the root word `install` routes to `Static`, where clap reports an unrecognized subcommand. This matches the analysis's manual verification step 5.
+1. **Hard break** — top-level `clining install` is removed, no alias. **Amended during implementation:** the root word `install` gets no dispatch special case; it routes to `Invocation` like any other first positional, so the old command fails as a not-found model load (exit 1) whose hint points at `clining api install <name> <spec>`. This avoids shadowing the legal model name `install` (only `api` is reserved) and keeps the failure message actionable; the substance of the break is unchanged (no old install flow runs, nothing is persisted).
 2. **Reserved name is exact-match** — `validate_name` rejects exactly `api` (lowercase); `API`, `apix`, `api-2` remain valid, since dispatch is also an exact string compare on `argv[1]`.
 3. **Scope is install only** — `list`/`edit`/`remove` are enabled by the structure, not implemented now. The `NotFound` hint mentions only `clining api install` (no future-verb advertising).
 4. **Legacy stores** containing a pre-reservation model named `api` are treated as practically nonexistent (v0); a graceful runtime error for that case is out of scope.
@@ -104,7 +104,7 @@ Adopted from the approved impact analysis without re-negotiation:
   - `Action` enum + `dispatch()` (`src/infra/cli/clap_cli.rs:210-225`), renamed to `Route` with variants `Management(Vec<String>)` / `Invocation(Vec<String>)` / `Static(Vec<String>)`; `CliApp::run()` (`src/infra/cli/clap_cli.rs:239`) arm names only
 - **Description:** Rework `dispatch` (keys on `argv[1]`, exact string compares):
   - `Some("api")` with the verb table matching `argv[2]` → `Route::Management`
-  - `Some("api")` otherwise, the root word `Some("install")`, flags, and zero args → `Route::Static` (hard-break: clap usage error for `install`; group help for `api`)
+  - `Some("api")` otherwise, flags, and zero args → `Route::Static` (group help or a clap usage error); the root word `Some("install")` routes to `Route::Invocation` like any other name (see amended assumption 1)
   - any other non-flag first positional → `Route::Invocation` (unchanged behavior)
   The variants must keep saying "which parse tree argv goes to", not "what executes" — help rendering can happen through clap on any route (`clining pets --help` already renders help via Invocation).
 - **Acceptance Criteria:**
@@ -130,7 +130,7 @@ Adopted from the approved impact analysis without re-negotiation:
 - **Affected Files:**
   - [common/mod.rs](tests/common/mod.rs) - MODIFY (`install()` helper at `tests/common/mod.rs:83-95`: argv becomes `["api", "install", name, spec, ...];`)
   - [auth.rs](tests/auth.rs) - MODIFY (inline argv sites at lines 30, 53, 201, 225, 342 become `["api", "install", ...]`)
-  - [errors.rs](tests/errors.rs) - MODIFY (hint assertion at line 23 → `clining api install`; zero-args usage assertion at line 36 → `api` group wording; new hard-break case) 
+  - [errors.rs](tests/errors.rs) - MODIFY (hint assertion at line 23 → `clining api install`; zero-args usage assertion at line 36 → `api` group wording; new not-found migration case for the top-level `install` word) 
   - [help.rs](tests/help.rs) / [invoke.rs](tests/invoke.rs) / [headers.rs](tests/headers.rs) - VERIFY ONLY (go through the harness helper; must pass unchanged)
 - **Affected Symbols:**
   - `install()` (harness), `run_cli` call sites with inline argv
@@ -140,7 +140,7 @@ Adopted from the approved impact analysis without re-negotiation:
   - reserved name: `clining api install api <spec>` → exit 1, one `error: ...` line on stderr mentioning the reserved word, zero bytes on stdout, no model file persisted
   - group help: `clining api --help` → exit 0, help on stdout, `install` listed
   - unknown verb: `clining api frobnicate` → exit 2, clap usage error on stderr
-  - hard break: `clining install pets <spec>` → exit 2, clap usage error on stderr
+  - not-found migration case: `clining install pets <spec>` → exit 1, one `error: ...` line naming `'install'` and hinting `'clining api install <name> <spec>'`; nothing persisted (amended assumption 1)
   - invocation unaffected: an installed API still invokes through `run_cli` with token/header flags (existing suites cover; add only if a gap appears)
 - **Acceptance Criteria:**
   - [ ] All five integration suites pass with the updated helper
@@ -177,7 +177,7 @@ Adopted from the approved impact analysis without re-negotiation:
 - Task 2 ↔ help-shape unit tests: top-level help lists `api` with `install`; `install` help unchanged beneath the group; `<api>` placeholder preserved (adapt `static_help_lists_install_and_api_placeholder` at `src/infra/cli/clap_cli.rs:842`).
 - Task 3 ↔ routing unit test `dispatch_routes_by_parse_tree` (adapted from `dispatch_routes_by_first_positional`, `src/infra/cli/clap_cli.rs:1092`).
 - Task 4 ↔ parse-navigation unit tests (`install_args_parse_*` at `src/infra/cli/clap_cli.rs:681-794` navigate `api` → `install`).
-- Task 5 ↔ e2e: updated all-suite run via harness; new reserved-name, group-help, unknown-verb, and hard-break cases in `tests/errors.rs` (or a sibling suite).
+- Task 5 ↔ e2e: updated all-suite run via harness; new reserved-name, group-help, unknown-verb, and not-found migration cases in `tests/errors.rs` (or a sibling suite).
 - Whole feature: `make check` (fmt + clippy `-D warnings` + full test suite).
 
 ### Manual Verification Steps
@@ -186,7 +186,7 @@ Adopted from the approved impact analysis without re-negotiation:
 2. `cargo run -- --help`, `cargo run -- api --help`, `cargo run -- api install --help` → group appears at top level; install help intact with token flags.
 3. Against a mock server (MockServer pattern): `cargo run -- pets pets get-pet --pet-id 42` → unchanged invocation path (status line + headers on stderr, body on stdout).
 4. `cargo run -- api nope pets get-pets` → `error: ... install it first with 'clining api install <name> <spec>'`, exit 1.
-5. `cargo run -- install pets tests/fixtures/petstore.json` → clap usage error on stderr, exit 2 (hard break effective).
+5. `cargo run -- install pets tests/fixtures/petstore.json` → not-found error on stderr, exit 1, hint naming `'clining api install <name> <spec>'` (no old install flow runs, nothing persisted — amended assumption 1).
 6. `git revert` dry-run sanity: the change is one commit; revert restores top-level `install` and every model installed via `clining api install` still loads.
 
 ### Definition of Done (DoD)
