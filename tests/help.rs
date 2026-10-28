@@ -114,20 +114,20 @@ fn command_help_shows_body_walkthrough_with_required_fields() {
     assert!(stdout.contains("application/json (required)"), "{stdout}");
     assert!(stdout.contains("Pet (object) {"), "{stdout}");
     assert!(
-        stdout.contains("id: integer (required): Pet id (minimum: 1)"),
+        stdout.contains("id: integer (required) (minimum: 1) — Pet id"),
         "{stdout}"
     );
     assert!(
-        stdout.contains("name: string (required): Pet name (minLength: 1)"),
+        stdout.contains("name: string (required) (minLength: 1) — Pet name"),
         "{stdout}"
     );
     assert!(
-        stdout.contains(r#"status: string: Pet status in the store (enum: "available", "pending", "sold"; example: "available")"#),
+        stdout.contains(r#"status: string (enum: "available", "pending", "sold"; example: "available") — Pet status in the store"#),
         "{stdout}"
     );
     assert!(stdout.contains("owner: Owner (object) {"), "{stdout}");
     assert!(
-        stdout.contains("name: string (required): Owner display name"),
+        stdout.contains("name: string (required) — Owner display name"),
         "{stdout}"
     );
     assert!(!stdout.contains("$ref"), "{stdout}");
@@ -169,11 +169,11 @@ fn command_help_shows_resolved_reference_schema_and_responses() {
     assert!(stdout.contains("Request: POST /store/orders"), "{stdout}");
     assert!(stdout.contains("Order (object) {"), "{stdout}");
     assert!(
-        stdout.contains("id: integer (required): Order id (minimum: 1)"),
+        stdout.contains("id: integer (required) (minimum: 1) — Order id"),
         "{stdout}"
     );
     assert!(
-        stdout.contains("quantity: integer: Number of units (minimum: 1; default: 1)"),
+        stdout.contains("quantity: integer (minimum: 1; default: 1) — Number of units"),
         "{stdout}"
     );
     assert!(stdout.contains("Responses"), "{stdout}");
@@ -187,7 +187,7 @@ fn command_help_shows_resolved_reference_schema_and_responses() {
     );
     assert!(stdout.contains("Error (object) {"), "{stdout}");
     assert!(
-        stdout.contains("message: string (required): Human-readable error message"),
+        stdout.contains("message: string (required) — Human-readable error message"),
         "{stdout}"
     );
     assert!(!stdout.contains("$ref"), "{stdout}");
