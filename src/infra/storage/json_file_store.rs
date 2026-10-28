@@ -1,6 +1,7 @@
 //! JSON file store adapter implementing the `ApiStore` port.
 
 use std::fs;
+use std::io::Write;
 use std::path::PathBuf;
 
 use crate::application::ports::ApiStore;
@@ -53,15 +54,24 @@ impl ApiStore for JsonFileStore {
         let bytes = serde_json::to_vec_pretty(model).map_err(|e| DomainError::Io {
             message: format!("failed to serialize model '{}': {e}", model.name),
         })?;
-        let tmp = path.with_file_name(format!(".{}.{}.tmp", model.name, std::process::id()));
-        if let Err(e) = fs::write(&tmp, &bytes) {
-            let _ = fs::remove_file(&tmp);
-            return Err(DomainError::Io {
-                message: format!("failed to write '{}': {e}", tmp.display()),
-            });
-        }
-        fs::rename(&tmp, &path).map_err(|e| DomainError::Io {
-            message: format!("failed to move '{}' into place: {e}", path.display()),
+        let mut tmp = tempfile::NamedTempFile::new_in(&self.root).map_err(|e| DomainError::Io {
+            message: format!(
+                "failed to create temporary file in '{}': {e}",
+                self.root.display()
+            ),
+        })?;
+        tmp.write_all(&bytes).map_err(|e| DomainError::Io {
+            message: format!(
+                "failed to write temporary file '{}': {e}",
+                tmp.path().display()
+            ),
+        })?;
+        tmp.persist(&path).map_err(|e| DomainError::Io {
+            message: format!(
+                "failed to move '{}' into place: {}",
+                path.display(),
+                e.error
+            ),
         })?;
         Ok(())
     }
@@ -137,6 +147,33 @@ mod tests {
         let root = temp_root("atomic");
         let store = JsonFileStore::new(root.clone());
         store.save(&sample_model("pets")).unwrap();
+        let entries: Vec<String> = fs::read_dir(&root)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(entries, vec!["pets.json"]);
+    }
+
+    #[test]
+    fn save_overwrites_existing_model_atomically() {
+        let root = temp_root("overwrite");
+        let store = JsonFileStore::new(root.clone());
+        let mut model1 = sample_model("pets");
+        model1.base_url = "https://example.com/v1".to_owned();
+        store.save(&model1).unwrap();
+        assert_eq!(
+            store.load_by_name("pets").unwrap().base_url,
+            "https://example.com/v1"
+        );
+
+        let mut model2 = sample_model("pets");
+        model2.base_url = "https://example.com/v2".to_owned();
+        store.save(&model2).unwrap();
+        assert_eq!(
+            store.load_by_name("pets").unwrap().base_url,
+            "https://example.com/v2"
+        );
+
         let entries: Vec<String> = fs::read_dir(&root)
             .unwrap()
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())

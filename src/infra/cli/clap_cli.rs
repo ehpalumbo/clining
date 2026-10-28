@@ -887,10 +887,9 @@ mod tests {
 
     #[test]
     fn token_file_absolute_path_passes_through() {
-        assert_eq!(
-            resolve_token_file_path("/tmp/token.txt").unwrap(),
-            "/tmp/token.txt"
-        );
+        let temp = std::env::temp_dir().join("token.txt");
+        let temp_str = temp.to_str().expect("valid utf-8 temp path");
+        assert_eq!(resolve_token_file_path(temp_str).unwrap(), temp_str);
     }
 
     #[test]

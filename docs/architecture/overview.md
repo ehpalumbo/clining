@@ -81,7 +81,7 @@ infrastructure  →  application  →  domain
 
 ## Storage Layout
 
-- Root: `$CLINING_DIR` if set, else `~/.clining/`.
+- Root: `$CLINING_DIR` if set, else `~/.clining/` (or `%USERPROFILE%\.clining` on Windows).
 - One plain JSON file per API: `<name>.json`.
 - Atomic replace on save; corrupt files surface as `InvalidStoredModel`, never as not-found.
 
