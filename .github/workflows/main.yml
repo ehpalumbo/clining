@@ -8,7 +8,6 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  AWS_LC_SYS_PREBUILT_NASM: 1
 
 jobs:
   build:
@@ -18,6 +17,9 @@ jobs:
         os: [ubuntu-latest, windows-latest]
 
     runs-on: ${{ matrix.os }}
+
+    env:
+      AWS_LC_SYS_PREBUILT_NASM: 1
 
     steps:
     - uses: actions/checkout@v4
