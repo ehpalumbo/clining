@@ -20,7 +20,7 @@ related:
 
 `clining` makes an OpenAPI-documented HTTP API available to agents as a local CLI. Given an OpenAPI spec, it "learns" the API shape, persists a model locally, and exposes the API's endpoints as commands. A caller invokes commands with named parameters and a body on stdin; the API's response body goes to stdout and its status line plus headers go to stderr. The CLI must be self-discoverable through `--help` at every level.
 
-Platform target: **Linux only**, implemented in **Rust**, organized with **onion architecture** (inward-only dependencies).
+Platform target: **Linux and Windows (x86_64)**, implemented in **Rust**, organized with **onion architecture** (inward-only dependencies).
 
 ## Usage Contract
 
