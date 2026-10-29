@@ -60,6 +60,22 @@ impl ApiStore for JsonFileStore {
                 self.root.display()
             ),
         })?;
+        // tempfile creates files as 0600 on Unix; restore the historical 0644
+        // (fs::write's `0666 & ~umask`) so models in a shared store directory
+        // stay readable. On Windows mode bits don't exist, files inherit the
+        // store directory's ACLs, and there is nothing to compensate for.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            tmp.as_file()
+                .set_permissions(fs::Permissions::from_mode(0o644))
+                .map_err(|e| DomainError::Io {
+                    message: format!(
+                        "failed to set permissions on temporary file '{}': {e}",
+                        tmp.path().display()
+                    ),
+                })?;
+        }
         tmp.write_all(&bytes).map_err(|e| DomainError::Io {
             message: format!(
                 "failed to write temporary file '{}': {e}",
@@ -112,6 +128,20 @@ mod tests {
         store.save(&model).unwrap();
         let loaded = store.load_by_name("pets").unwrap();
         assert_eq!(loaded, model);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn saved_model_files_are_mode_0644() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = temp_root("permissions");
+        let store = JsonFileStore::new(root.clone());
+        store.save(&sample_model("pets")).unwrap();
+        let mode = fs::metadata(root.join("pets.json"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o644);
     }
 
     #[test]
