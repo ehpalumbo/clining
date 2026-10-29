@@ -20,7 +20,7 @@ related:
 
 `clining` makes an OpenAPI-documented HTTP API available to agents as a local CLI. Given an OpenAPI spec, it "learns" the API shape, persists a model locally, and exposes the API's endpoints as commands. A caller invokes commands with named parameters and a body on stdin; the API's response body goes to stdout and its status line plus headers go to stderr. The CLI must be self-discoverable through `--help` at every level.
 
-Platform target: **Linux only**, implemented in **Rust**, organized with **onion architecture** (inward-only dependencies).
+Platform target: **Linux and Windows (x86_64)**, implemented in **Rust**, organized with **onion architecture** (inward-only dependencies).
 
 ## Usage Contract
 
@@ -75,13 +75,13 @@ Platform target: **Linux only**, implemented in **Rust**, organized with **onion
 
 ### FR-5 Local Storage
 
-- FR-5.1 Model files are plain JSON under `~/.clining/<name>.json`; the root is overridable via the `CLINING_DIR` environment variable.
+- FR-5.1 Model files are plain JSON under `~/.clining/<name>.json` (or `%USERPROFILE%\.clining\<name>.json` on Windows); the root is overridable via the `CLINING_DIR` environment variable.
 - FR-5.2 Writes are atomic (temp file + rename) so no partial file is left behind.
 - FR-5.3 A missing model is reported as **not found**; a present but unparseable/corrupt model is reported as a distinct **invalid stored model** error (with file path and parse reason) — never masked as not found.
 
 ## Non-Functional Requirements
 
-- NFR-1 Target platform: Linux only.
+- NFR-1 Target platforms: Linux and Windows (x86_64).
 - NFR-2 Language: Rust, `edition 2024`.
 - NFR-3 Onion architecture: concentric layers with inward-only dependencies; CLI, storage, HTTP, and spec parsing are infrastructure adapters; domain and use cases stay free of infrastructure concerns.
 - NFR-4 Presence-only input validation in v0 (see FR-3.6).

@@ -1,6 +1,7 @@
 //! JSON file store adapter implementing the `ApiStore` port.
 
 use std::fs;
+use std::io::Write;
 use std::path::PathBuf;
 
 use crate::application::ports::ApiStore;
@@ -53,15 +54,40 @@ impl ApiStore for JsonFileStore {
         let bytes = serde_json::to_vec_pretty(model).map_err(|e| DomainError::Io {
             message: format!("failed to serialize model '{}': {e}", model.name),
         })?;
-        let tmp = path.with_file_name(format!(".{}.{}.tmp", model.name, std::process::id()));
-        if let Err(e) = fs::write(&tmp, &bytes) {
-            let _ = fs::remove_file(&tmp);
-            return Err(DomainError::Io {
-                message: format!("failed to write '{}': {e}", tmp.display()),
-            });
+        let mut tmp = tempfile::NamedTempFile::new_in(&self.root).map_err(|e| DomainError::Io {
+            message: format!(
+                "failed to create temporary file in '{}': {e}",
+                self.root.display()
+            ),
+        })?;
+        // tempfile creates files as 0600 on Unix; restore the historical 0644
+        // (fs::write's `0666 & ~umask`) so models in a shared store directory
+        // stay readable. On Windows mode bits don't exist, files inherit the
+        // store directory's ACLs, and there is nothing to compensate for.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            tmp.as_file()
+                .set_permissions(fs::Permissions::from_mode(0o644))
+                .map_err(|e| DomainError::Io {
+                    message: format!(
+                        "failed to set permissions on temporary file '{}': {e}",
+                        tmp.path().display()
+                    ),
+                })?;
         }
-        fs::rename(&tmp, &path).map_err(|e| DomainError::Io {
-            message: format!("failed to move '{}' into place: {e}", path.display()),
+        tmp.write_all(&bytes).map_err(|e| DomainError::Io {
+            message: format!(
+                "failed to write temporary file '{}': {e}",
+                tmp.path().display()
+            ),
+        })?;
+        tmp.persist(&path).map_err(|e| DomainError::Io {
+            message: format!(
+                "failed to move '{}' into place: {}",
+                path.display(),
+                e.error
+            ),
         })?;
         Ok(())
     }
@@ -104,6 +130,20 @@ mod tests {
         assert_eq!(loaded, model);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn saved_model_files_are_mode_0644() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = temp_root("permissions");
+        let store = JsonFileStore::new(root.clone());
+        store.save(&sample_model("pets")).unwrap();
+        let mode = fs::metadata(root.join("pets.json"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o644);
+    }
+
     #[test]
     fn missing_file_is_not_found() {
         let root = temp_root("missing");
@@ -137,6 +177,33 @@ mod tests {
         let root = temp_root("atomic");
         let store = JsonFileStore::new(root.clone());
         store.save(&sample_model("pets")).unwrap();
+        let entries: Vec<String> = fs::read_dir(&root)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(entries, vec!["pets.json"]);
+    }
+
+    #[test]
+    fn save_overwrites_existing_model_atomically() {
+        let root = temp_root("overwrite");
+        let store = JsonFileStore::new(root.clone());
+        let mut model1 = sample_model("pets");
+        model1.base_url = "https://example.com/v1".to_owned();
+        store.save(&model1).unwrap();
+        assert_eq!(
+            store.load_by_name("pets").unwrap().base_url,
+            "https://example.com/v1"
+        );
+
+        let mut model2 = sample_model("pets");
+        model2.base_url = "https://example.com/v2".to_owned();
+        store.save(&model2).unwrap();
+        assert_eq!(
+            store.load_by_name("pets").unwrap().base_url,
+            "https://example.com/v2"
+        );
+
         let entries: Vec<String> = fs::read_dir(&root)
             .unwrap()
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())

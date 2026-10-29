@@ -11,12 +11,23 @@ env:
 
 jobs:
   build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
 
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+
+    env:
+      AWS_LC_SYS_PREBUILT_NASM: 1
 
     steps:
     - uses: actions/checkout@v4
-    - name: Check
-      run: make check
+    - name: Rustfmt
+      run: cargo fmt --check
+    - name: Clippy
+      run: cargo clippy --all-targets -- -D warnings
+    - name: Test
+      run: cargo test
     - name: Build
-      run: make build
+      run: cargo build --release
