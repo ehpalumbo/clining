@@ -6,7 +6,7 @@ use url::Url;
 
 use crate::domain::errors::DomainError;
 use crate::domain::headers::{CustomHeader, is_forbidden_header_name};
-use crate::domain::model::{ApiOperation, HttpRequest};
+use crate::domain::model::{ApiOperation, HttpRequest, ResponseSpec};
 
 /// Builds a fully-specified `HttpRequest` from an operation, supplied values,
 /// an optional body, an optional resolved bearer token, and any custom headers.
@@ -14,8 +14,10 @@ use crate::domain::model::{ApiOperation, HttpRequest};
 /// query parameters are resolved back to their original spec names during
 /// substitution. When `token` is `Some`, an `Authorization: Bearer <token>`
 /// header is appended (the token must already be resolved; this function
-/// performs no I/O). Custom headers override generated headers
-/// case-insensitively and are appended in input order, one pair per occurrence.
+/// performs no I/O). The `Accept` header is derived from the operation's
+/// declared success-response media types (see `accept_header`). Custom headers
+/// override generated headers case-insensitively and are appended in input
+/// order, one pair per occurrence.
 pub fn build_request(
     base_url: &str,
     operation: &ApiOperation,
@@ -32,7 +34,7 @@ pub fn build_request(
             "User-Agent".to_owned(),
             format!("clining/{}", env!("CARGO_PKG_VERSION")),
         ),
-        ("Accept".to_owned(), "application/json".to_owned()),
+        ("Accept".to_owned(), accept_header(&operation.responses)),
     ];
     if let Some(token) = token {
         headers.push(("Authorization".to_owned(), format!("Bearer {token}")));
@@ -69,6 +71,48 @@ pub fn build_request(
         headers,
         body: body.map(<[u8]>::to_vec),
     })
+}
+
+/// Derives the `Accept` header value from an operation's response specs.
+///
+/// Success (2xx) response media types are collected in first-seen order and
+/// deduplicated case-insensitively into a comma-separated list. Wildcard
+/// media types (for example `application/*`) pass through as declared. When
+/// the operation declares no success body — status-only responses such as
+/// `204`, or stored models captured before response content was recorded —
+/// `*/*` is sent so the server picks its default representation instead of
+/// rejecting the negotiated types with `406 Not Acceptable`.
+fn accept_header(responses: &[ResponseSpec]) -> String {
+    let mut seen: Vec<&str> = Vec::new();
+    for response in responses {
+        if !is_success_status(&response.status_code) {
+            continue;
+        }
+        if let Some(content_type) = &response.content_type
+            && !seen
+                .iter()
+                .any(|existing| existing.eq_ignore_ascii_case(content_type))
+        {
+            seen.push(content_type);
+        }
+    }
+    if seen.is_empty() {
+        "*/*".to_owned()
+    } else {
+        seen.join(", ")
+    }
+}
+
+/// Whether a response status-code key denotes a success (2xx) response:
+/// an exact code in `200..=299` or the `2XX` range wildcard. The `default`
+/// key is ignored because it usually documents error responses.
+fn is_success_status(status_code: &str) -> bool {
+    if status_code.eq_ignore_ascii_case("2XX") {
+        return true;
+    }
+    status_code.len() == 3
+        && status_code.as_bytes()[0] == b'2'
+        && status_code.as_bytes()[1..3].iter().all(u8::is_ascii_digit)
 }
 
 /// Merges custom headers into the generated header list.
@@ -172,7 +216,7 @@ fn build_url(
 mod tests {
     use super::*;
 
-    use crate::domain::model::{BodySpec, HttpMethod, Param};
+    use crate::domain::model::{BodySpec, HttpMethod, Param, ResponseSpec};
 
     fn build(
         base_url: &str,
@@ -182,6 +226,21 @@ mod tests {
         token: Option<&str>,
     ) -> Result<HttpRequest, DomainError> {
         build_request(base_url, operation, values, body, token, &[])
+    }
+
+    fn response(status_code: &str, content_type: Option<&str>) -> ResponseSpec {
+        ResponseSpec {
+            status_code: status_code.to_owned(),
+            description: None,
+            content_type: content_type.map(str::to_owned),
+            schema: None,
+        }
+    }
+
+    fn with_responses(operation: &ApiOperation, responses: Vec<ResponseSpec>) -> ApiOperation {
+        let mut operation = operation.clone();
+        operation.responses = responses;
+        operation
     }
 
     fn operation_with(
@@ -249,11 +308,148 @@ mod tests {
                 .iter()
                 .any(|(k, v)| k == "User-Agent" && v.starts_with("clining/"))
         );
-        assert!(
-            req.headers
-                .iter()
-                .any(|(k, v)| k == "Accept" && v == "application/json")
+        // No declared success responses (legacy stored model): the wildcard
+        // fallback lets the server pick its default representation.
+        assert!(req.headers.iter().any(|(k, v)| k == "Accept" && v == "*/*"));
+    }
+
+    #[test]
+    fn accept_matches_declared_success_media_type() {
+        let operation = with_responses(
+            &operation_with("/pets", vec![], vec![], None),
+            vec![response("200", Some("text/csv"))],
         );
+        let req = build(
+            "https://api.example.com",
+            &operation,
+            &HashMap::new(),
+            None,
+            None,
+        )
+        .unwrap();
+        assert!(accept_of(&req).contains("text/csv"));
+    }
+
+    #[test]
+    fn accept_union_collects_media_types_across_success_statuses() {
+        let operation = with_responses(
+            &operation_with("/pets", vec![], vec![], None),
+            vec![
+                response("200", Some("application/json")),
+                response("206", Some("text/csv")),
+            ],
+        );
+        let req = build(
+            "https://api.example.com",
+            &operation,
+            &HashMap::new(),
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(accept_of(&req), "application/json, text/csv");
+    }
+
+    #[test]
+    fn accept_deduplicates_case_insensitively_in_first_seen_order() {
+        let operation = with_responses(
+            &operation_with("/pets", vec![], vec![], None),
+            vec![
+                response("200", Some("application/json")),
+                response("201", Some("APPLICATION/JSON")),
+                response("202", Some("text/plain")),
+            ],
+        );
+        let req = build(
+            "https://api.example.com",
+            &operation,
+            &HashMap::new(),
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(accept_of(&req), "application/json, text/plain");
+    }
+
+    #[test]
+    fn accept_ignores_error_statuses_and_default() {
+        let operation = with_responses(
+            &operation_with("/pets", vec![], vec![], None),
+            vec![
+                response("default", Some("application/problem+json")),
+                response("404", Some("application/json")),
+                response("4XX", Some("text/html")),
+            ],
+        );
+        let req = build(
+            "https://api.example.com",
+            &operation,
+            &HashMap::new(),
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(accept_of(&req), "*/*");
+    }
+
+    #[test]
+    fn accept_treats_2xx_wildcard_status_as_success() {
+        let operation = with_responses(
+            &operation_with("/pets", vec![], vec![], None),
+            vec![response("2XX", Some("text/csv"))],
+        );
+        let req = build(
+            "https://api.example.com",
+            &operation,
+            &HashMap::new(),
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(accept_of(&req), "text/csv");
+    }
+
+    #[test]
+    fn accept_falls_back_to_wildcard_when_no_success_body_declared() {
+        let operation = with_responses(
+            &operation_with("/ping", vec![], vec![], None),
+            vec![response("204", None)],
+        );
+        let req = build(
+            "https://api.example.com",
+            &operation,
+            &HashMap::new(),
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(accept_of(&req), "*/*");
+    }
+
+    #[test]
+    fn accept_passes_wildcard_media_types_through() {
+        let operation = with_responses(
+            &operation_with("/pets", vec![], vec![], None),
+            vec![response("200", Some("application/*"))],
+        );
+        let req = build(
+            "https://api.example.com",
+            &operation,
+            &HashMap::new(),
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(accept_of(&req), "application/*");
+    }
+
+    fn accept_of(req: &HttpRequest) -> String {
+        req.headers
+            .iter()
+            .filter(|(k, _)| k.eq_ignore_ascii_case("accept"))
+            .map(|(_, v)| v.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
     }
 
     #[test]
