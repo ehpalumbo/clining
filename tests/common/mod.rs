@@ -159,6 +159,8 @@ impl MockServer {
                     (200, b"{\"name\":\"fluffy\"}")
                 } else if request_line.starts_with("GET /binary") {
                     (200, BINARY_BODY)
+                } else if request_line.starts_with("GET /ping") {
+                    (204, b"")
                 } else if request_line.starts_with("GET /pets/42") {
                     (200, b"{\"id\":42}")
                 } else if request_line.starts_with("POST /pets") {
