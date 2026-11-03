@@ -1,12 +1,12 @@
 ---
-type: workflow
+type: plan
 title: "Phase 4 — Discovery Polish & Hardening"
 description: "Makes clining discoverable and pleasant for agents: enriched help, hardened error UX, end-to-end tests, and the README and Makefile."
 tags:
   - "clining"
   - "implementation-plan"
   - "phase-4"
-timestamp: "2026-08-17T19:47:50Z"
+timestamp: "2026-11-03T21:21:20Z"
 related:
   - "[Phased Implementation Plan](../../plans/implementation-plan.md)"
 ---

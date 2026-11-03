@@ -8,7 +8,7 @@ tags:
   - "openapi"
   - "cli"
   - "agents"
-timestamp: "2026-08-17T19:47:50Z"
+timestamp: "2026-11-03T21:21:20Z"
 related:
   - "[Architecture Overview](../architecture/overview.md)"
   - "[Phased Implementation Plan](../plans/implementation-plan.md)"
@@ -114,7 +114,7 @@ All errors go to stderr as a one-line `error: <message>`; all failure paths exit
 
 ## Out of Scope (v0)
 
-- JSON Schema validation of request bodies and parameter values (presence-only only).
+- JSON Schema validation of request bodies and parameter values (presence-only).
 - Persistent non-Bearer authentication and credential management. Ad-hoc custom headers via `-H` are supported, but header files (`-H @file`), environment-provided headers, install-time headers, API/group header inheritance, and a `--config` file are not.
 - Auth beyond Bearer tokens via env var or token file (no API keys, OAuth flows, etc.). A caller-supplied `Authorization` header can override the generated Bearer header per invocation, but it is not persisted.
 - OpenAPI 3.1 and 2.0 (Swagger) support.

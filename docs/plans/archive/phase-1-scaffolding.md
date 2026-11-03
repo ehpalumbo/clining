@@ -1,12 +1,12 @@
 ---
-type: workflow
+type: plan
 title: "Phase 1 — Toolchain & Onion Scaffolding"
 description: "Installs the Rust toolchain and lays down the clining crate with its onion module skeleton and a lint-clean, test-passing baseline."
 tags:
   - "clining"
   - "implementation-plan"
   - "phase-1"
-timestamp: "2026-08-17T19:47:50Z"
+timestamp: "2026-11-03T21:21:20Z"
 related:
   - "[Phased Implementation Plan](../../plans/implementation-plan.md)"
 ---

@@ -1,13 +1,13 @@
 ---
-type: workflow
+type: plan
 title: "clining v0 — Phased Implementation Plan"
 description: "The four-phase, one-commit-per-phase build plan for clining v0, with per-phase status and the whole-feature definition of done."
 tags:
   - "clining"
   - "implementation-plan"
   - "phases"
-  - "workflow"
-timestamp: "2026-08-17T19:47:50Z"
+  - "plan"
+timestamp: "2026-11-03T21:21:20Z"
 related:
   - "[Requirements Specification](../specs/spec.md)"
   - "[Architecture Overview](../architecture/overview.md)"

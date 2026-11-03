@@ -1,12 +1,12 @@
 ---
-type: workflow
+type: plan
 title: "Phase 3 — \"Invoke\" Vertical Slice"
 description: "Implements the invoke flow: resolving a command from the stored model, building the HTTP request from params and stdin body, sending it, and streaming the response."
 tags:
   - "clining"
   - "implementation-plan"
   - "phase-3"
-timestamp: "2026-08-17T19:47:50Z"
+timestamp: "2026-11-03T21:21:20Z"
 related:
   - "[Phased Implementation Plan](../../plans/implementation-plan.md)"
 ---
