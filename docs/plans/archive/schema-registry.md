@@ -1,12 +1,12 @@
 ---
-type: workflow
+type: plan
 title: "Issue #1 — Resolve OpenAPI $ref references; store request + response body schemas"
 description: "Replaces raw-JSON schema storage with a typed SchemaSpec tree and a schema registry, captures response bodies per operation, and renders a fully-resolved JSON schema tree in the CLI command footer."
 tags:
   - "clining"
   - "implementation-plan"
   - "schema-registry"
-timestamp: "2026-08-20T22:36:32Z"
+timestamp: "2026-11-03T21:21:20Z"
 related:
   - "[Phased Implementation Plan](../implementation-plan.md)"
   - "[Requirements Specification](../../specs/spec.md)"

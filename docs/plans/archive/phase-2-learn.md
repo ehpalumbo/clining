@@ -1,12 +1,12 @@
 ---
-type: workflow
+type: plan
 title: "Phase 2 — \"Learn\" Vertical Slice"
 description: "Implements the full learn flow: fetch a spec (file or URI), parse OpenAPI 3.0 into the domain model, and persist it under ~/.clining."
 tags:
   - "clining"
   - "implementation-plan"
   - "phase-2"
-timestamp: "2026-08-17T19:47:50Z"
+timestamp: "2026-11-03T21:21:20Z"
 related:
   - "[Phased Implementation Plan](../../plans/implementation-plan.md)"
 ---
