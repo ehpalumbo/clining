@@ -51,7 +51,7 @@ impl ApiStore for JsonFileStore {
             ),
         })?;
         let path = self.path_for(&model.name);
-        let bytes = serde_json::to_vec_pretty(model).map_err(|e| DomainError::Io {
+        let bytes = serde_json::to_vec(model).map_err(|e| DomainError::Io {
             message: format!("failed to serialize model '{}': {e}", model.name),
         })?;
         let mut tmp = tempfile::NamedTempFile::new_in(&self.root).map_err(|e| DomainError::Io {
@@ -128,6 +128,19 @@ mod tests {
         store.save(&model).unwrap();
         let loaded = store.load_by_name("pets").unwrap();
         assert_eq!(loaded, model);
+    }
+
+    #[test]
+    fn stored_files_are_compact_json() {
+        let root = temp_root("compact");
+        let store = JsonFileStore::new(root.clone());
+        store.save(&sample_model("pets")).unwrap();
+        let raw = fs::read_to_string(root.join("pets.json")).unwrap();
+        assert!(
+            !raw.contains('\n'),
+            "stored model should be compact JSON: {raw}"
+        );
+        assert_eq!(store.load_by_name("pets").unwrap(), sample_model("pets"));
     }
 
     #[cfg(unix)]
