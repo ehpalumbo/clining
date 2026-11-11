@@ -89,4 +89,12 @@ pub struct RequestBody {
 #[derive(Debug, Deserialize)]
 pub struct MediaType {
     pub schema: Option<serde_json::Value>,
+    pub encoding: Option<BTreeMap<String, MediaTypeEncoding>>,
+}
+
+/// Per-part encoding metadata for multipart media types.
+#[derive(Debug, Deserialize)]
+pub struct MediaTypeEncoding {
+    #[serde(rename = "contentType")]
+    pub content_type: Option<String>,
 }

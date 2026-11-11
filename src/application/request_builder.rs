@@ -7,6 +7,7 @@ use url::Url;
 use crate::domain::errors::DomainError;
 use crate::domain::headers::{CustomHeader, is_forbidden_header_name};
 use crate::domain::model::{ApiOperation, HttpRequest, ResponseSpec};
+use crate::domain::multipart::{FormPart, boundary, encode, is_multipart_form_data};
 
 /// Builds a fully-specified `HttpRequest` from an operation, supplied values,
 /// an optional body, an optional resolved bearer token, and any custom headers.
@@ -25,9 +26,14 @@ pub fn build_request(
     body: Option<&[u8]>,
     token: Option<&str>,
     custom_headers: &[CustomHeader],
+    form_parts: &[FormPart],
 ) -> Result<HttpRequest, DomainError> {
     let body = body.filter(|b| !b.is_empty());
+    let mut body = body.map(<[u8]>::to_vec);
     let url = build_url(base_url, operation, values)?;
+    let custom_content_type = custom_headers
+        .iter()
+        .any(|header| header.name.eq_ignore_ascii_case("content-type"));
 
     let mut headers: Vec<(String, String)> = vec![
         (
@@ -41,7 +47,49 @@ pub fn build_request(
     }
 
     match &operation.request_body {
+        Some(spec) if is_multipart_form_data(&spec.content_type) => {
+            if custom_content_type {
+                // The caller owns the body: stdin is sent raw with the manual
+                // Content-Type. Supplying parts too would be ambiguous.
+                if !form_parts.is_empty() {
+                    return Err(DomainError::Body {
+                        message: format!(
+                            "command '{}' cannot combine -F form parts with a custom Content-Type header (framing would be ambiguous)",
+                            operation.name
+                        ),
+                    });
+                }
+                if body.is_some() {
+                    headers.push(("Content-Type".to_owned(), spec.content_type.clone()));
+                } else if spec.required {
+                    return Err(multipart_required_error(operation));
+                }
+            } else if !form_parts.is_empty() {
+                if body.is_some() {
+                    return Err(multipart_stdin_error(operation));
+                }
+                let boundary = boundary();
+                let encoded = encode(&boundary, form_parts, spec.parts.as_deref().unwrap_or(&[]));
+                body = Some(encoded);
+                headers.push((
+                    "Content-Type".to_owned(),
+                    format!("multipart/form-data; boundary={boundary}"),
+                ));
+            } else if body.is_some() {
+                return Err(multipart_stdin_error(operation));
+            } else if spec.required {
+                return Err(multipart_required_error(operation));
+            }
+        }
         Some(spec) => {
+            if !form_parts.is_empty() {
+                return Err(DomainError::Body {
+                    message: format!(
+                        "command '{}' takes its body on stdin; -F form parts support multipart/form-data commands only",
+                        operation.name
+                    ),
+                });
+            }
             if body.is_some() {
                 let content_type = if spec.content_type.is_empty() {
                     "application/json"
@@ -56,7 +104,7 @@ pub fn build_request(
             }
         }
         None => {
-            if body.is_some() {
+            if body.is_some() || !form_parts.is_empty() {
                 return Err(DomainError::Body {
                     message: format!("command '{}' declares no request body", operation.name),
                 });
@@ -69,8 +117,26 @@ pub fn build_request(
         method: operation.method,
         url,
         headers,
-        body: body.map(<[u8]>::to_vec),
+        body,
     })
+}
+
+fn multipart_required_error(operation: &ApiOperation) -> DomainError {
+    DomainError::Body {
+        message: format!(
+            "command '{}' requires a request body: multipart/form-data; supply parts with -F <field>=<value> or <field>=@<path>",
+            operation.name
+        ),
+    }
+}
+
+fn multipart_stdin_error(operation: &ApiOperation) -> DomainError {
+    DomainError::Body {
+        message: format!(
+            "command '{}' takes multipart form fields; pass -F <field>=@<path> parts, or override the body Content-Type with -H to send raw",
+            operation.name
+        ),
+    }
 }
 
 /// Derives the `Accept` header value from an operation's response specs.
@@ -225,7 +291,7 @@ mod tests {
         body: Option<&[u8]>,
         token: Option<&str>,
     ) -> Result<HttpRequest, DomainError> {
-        build_request(base_url, operation, values, body, token, &[])
+        build_request(base_url, operation, values, body, token, &[], &[])
     }
 
     fn response(status_code: &str, content_type: Option<&str>) -> ResponseSpec {
@@ -545,6 +611,7 @@ mod tests {
             content_type: "application/json".to_owned(),
             description: None,
             schema: None,
+            parts: None,
         };
         let operation = operation_with("/pets", vec![], vec![], Some(spec));
         let err = build(
@@ -565,6 +632,7 @@ mod tests {
             content_type: "application/json".to_owned(),
             description: None,
             schema: None,
+            parts: None,
         };
         let operation = operation_with("/pets", vec![], vec![], Some(spec));
         let req = build(
@@ -590,6 +658,7 @@ mod tests {
             content_type: String::new(),
             description: None,
             schema: None,
+            parts: None,
         };
         let operation = operation_with("/pets", vec![], vec![], Some(spec));
         let req = build(
@@ -697,6 +766,7 @@ mod tests {
             None,
             Some("secret-123"),
             &custom,
+            &[],
         )
         .unwrap();
 
@@ -739,6 +809,7 @@ mod tests {
             content_type: "application/json".to_owned(),
             description: None,
             schema: None,
+            parts: None,
         };
         let operation = operation_with("/pets", vec![], vec![], Some(spec));
         let custom = vec![header("content-type", "text/plain")];
@@ -749,6 +820,7 @@ mod tests {
             Some(b"hello"),
             None,
             &custom,
+            &[],
         )
         .unwrap();
         assert_eq!(
@@ -773,6 +845,7 @@ mod tests {
             None,
             None,
             &custom,
+            &[],
         )
         .unwrap();
         let values: Vec<&str> = req
@@ -802,6 +875,7 @@ mod tests {
             None,
             None,
             &[],
+            &[],
         )
         .unwrap();
         assert_eq!(with_custom.headers, baseline.headers);
@@ -818,9 +892,238 @@ mod tests {
             None,
             None,
             &custom,
+            &[],
         )
         .unwrap_err();
         assert!(matches!(err, DomainError::Header { .. }), "{err}");
         assert!(!err.to_string().contains("close"), "{err}");
+    }
+
+    fn multipart_spec(required: bool) -> BodySpec {
+        use crate::domain::model::{PartKind, PartSpec};
+        BodySpec {
+            required,
+            content_type: "multipart/form-data".to_owned(),
+            description: None,
+            schema: None,
+            parts: Some(vec![
+                PartSpec {
+                    name: "name".to_owned(),
+                    required: true,
+                    kind: PartKind::Text,
+                    repeated: false,
+                    content_type: None,
+                },
+                PartSpec {
+                    name: "photo".to_owned(),
+                    required: false,
+                    kind: PartKind::File,
+                    repeated: false,
+                    content_type: Some("image/jpeg".to_owned()),
+                },
+            ]),
+        }
+    }
+
+    fn text_part(name: &str, value: &str) -> FormPart {
+        FormPart {
+            name: name.to_owned(),
+            value: crate::domain::multipart::FormPartValue::Text(value.to_owned()),
+        }
+    }
+
+    fn file_part(name: &str, filename: &str, bytes: &[u8]) -> FormPart {
+        FormPart {
+            name: name.to_owned(),
+            value: crate::domain::multipart::FormPartValue::File {
+                filename: filename.to_owned(),
+                bytes: bytes.to_vec(),
+                content_type: None,
+            },
+        }
+    }
+
+    fn content_type_of(req: &HttpRequest) -> String {
+        req.headers
+            .iter()
+            .filter(|(name, _)| name.eq_ignore_ascii_case("content-type"))
+            .map(|(_, value)| value.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    #[test]
+    fn multipart_parts_are_framed_with_a_generated_boundary() {
+        let operation = operation_with("/pets", vec![], vec![], Some(multipart_spec(true)));
+        let parts = vec![
+            text_part("name", "fluffy"),
+            file_part("photo", "cat.png", b"\x00\xffbinary"),
+        ];
+        let req = build_request(
+            "https://api.example.com",
+            &operation,
+            &HashMap::new(),
+            None,
+            None,
+            &[],
+            &parts,
+        )
+        .unwrap();
+
+        let content_type = content_type_of(&req);
+        let boundary = content_type
+            .strip_prefix("multipart/form-data; boundary=")
+            .expect("generated boundary");
+        assert!(boundary.starts_with("clining-"), "{content_type}");
+
+        let expected = [
+            format!("--{boundary}\r\n"),
+            "Content-Disposition: form-data; name=\"name\"\r\n".to_owned(),
+            "\r\n".to_owned(),
+            "fluffy\r\n".to_owned(),
+            format!("--{boundary}\r\n"),
+            "Content-Disposition: form-data; name=\"photo\"; filename=\"cat.png\"\r\n".to_owned(),
+            "Content-Type: image/jpeg\r\n".to_owned(),
+            "\r\n".to_owned(),
+        ]
+        .concat()
+        .into_bytes()
+        .into_iter()
+        .chain(b"\x00\xffbinary".iter().copied())
+        .chain(format!("\r\n--{boundary}--\r\n").into_bytes())
+        .collect::<Vec<u8>>();
+        assert_eq!(req.body, Some(expected));
+    }
+
+    #[test]
+    fn form_parts_with_stdin_without_override_are_rejected() {
+        let operation = operation_with("/pets", vec![], vec![], Some(multipart_spec(true)));
+        let err = build_request(
+            "https://api.example.com",
+            &operation,
+            &HashMap::new(),
+            Some(b"raw"),
+            None,
+            &[],
+            &[text_part("name", "fluffy")],
+        )
+        .unwrap_err();
+        assert!(matches!(err, DomainError::Body { .. }), "{err}");
+        assert!(err.to_string().contains("'test'"), "{err}");
+        assert!(err.to_string().contains("-F"), "{err}");
+    }
+
+    #[test]
+    fn stdin_is_sent_raw_when_a_custom_content_type_is_supplied() {
+        let operation = operation_with("/pets", vec![], vec![], Some(multipart_spec(true)));
+        let custom = vec![header("Content-Type", "application/json")];
+        let req = build_request(
+            "https://api.example.com",
+            &operation,
+            &HashMap::new(),
+            Some(b"{\"raw\":true}"),
+            None,
+            &custom,
+            &[],
+        )
+        .unwrap();
+        assert_eq!(req.body, Some(b"{\"raw\":true}".to_vec()));
+        assert_eq!(content_type_of(&req), "application/json");
+    }
+
+    #[test]
+    fn form_parts_with_a_custom_content_type_are_rejected() {
+        let operation = operation_with("/pets", vec![], vec![], Some(multipart_spec(true)));
+        let custom = vec![header("Content-Type", "application/json")];
+        let err = build_request(
+            "https://api.example.com",
+            &operation,
+            &HashMap::new(),
+            Some(b"raw"),
+            None,
+            &custom,
+            &[text_part("name", "fluffy")],
+        )
+        .unwrap_err();
+        assert!(matches!(err, DomainError::Body { .. }), "{err}");
+        assert!(err.to_string().contains("cannot combine"), "{err}");
+        assert!(err.to_string().contains("'test'"), "{err}");
+    }
+
+    #[test]
+    fn required_multipart_body_without_parts_or_stdin_hints_at_f() {
+        let operation = operation_with("/pets", vec![], vec![], Some(multipart_spec(true)));
+        let err = build(
+            "https://api.example.com",
+            &operation,
+            &HashMap::new(),
+            None,
+            None,
+        )
+        .unwrap_err();
+        assert!(matches!(err, DomainError::Body { .. }), "{err}");
+        assert!(err.to_string().contains("multipart/form-data"), "{err}");
+        assert!(err.to_string().contains("-F <field>"), "{err}");
+    }
+
+    #[test]
+    fn optional_multipart_body_without_parts_sends_nothing() {
+        let operation = operation_with("/pets", vec![], vec![], Some(multipart_spec(false)));
+        let req = build(
+            "https://api.example.com",
+            &operation,
+            &HashMap::new(),
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(req.body, None);
+        assert_eq!(content_type_of(&req), "");
+    }
+
+    #[test]
+    fn form_parts_on_a_json_body_are_rejected() {
+        let spec = BodySpec {
+            required: true,
+            content_type: "application/json".to_owned(),
+            description: None,
+            schema: None,
+            parts: None,
+        };
+        let operation = operation_with("/pets", vec![], vec![], Some(spec));
+        let err = build_request(
+            "https://api.example.com",
+            &operation,
+            &HashMap::new(),
+            None,
+            None,
+            &[],
+            &[text_part("name", "fluffy")],
+        )
+        .unwrap_err();
+        assert!(matches!(err, DomainError::Body { .. }), "{err}");
+        assert!(err.to_string().contains("takes its body on stdin"), "{err}");
+        assert!(err.to_string().contains("'test'"), "{err}");
+    }
+
+    #[test]
+    fn form_parts_on_a_bodyless_command_are_rejected_first() {
+        let operation = operation_with("/pets", vec![], vec![], None);
+        let err = build_request(
+            "https://api.example.com",
+            &operation,
+            &HashMap::new(),
+            None,
+            None,
+            &[],
+            &[text_part("name", "fluffy")],
+        )
+        .unwrap_err();
+        assert!(matches!(err, DomainError::Body { .. }), "{err}");
+        assert!(
+            err.to_string().contains("declares no request body"),
+            "{err}"
+        );
+        assert!(err.to_string().contains("'test'"), "{err}");
     }
 }
