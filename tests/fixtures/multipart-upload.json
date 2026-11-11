@@ -1,0 +1,47 @@
+{
+  "openapi": "3.0.0",
+  "info": { "title": "Uploads", "version": "1.0.0" },
+  "servers": [{ "url": "https://api.example.com" }],
+  "tags": [{ "name": "uploads", "description": "Upload endpoints" }],
+  "paths": {
+    "/uploads": {
+      "post": {
+        "operationId": "createUpload",
+        "summary": "Upload a file",
+        "tags": ["uploads"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": ["name", "photo"],
+                "properties": {
+                  "name": { "type": "string" },
+                  "photo": { "type": "string", "format": "binary" },
+                  "tags": {
+                    "type": "array",
+                    "items": { "type": "string" }
+                  }
+                }
+              },
+              "encoding": {
+                "photo": { "contentType": "image/jpeg" }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": { "type": "object" }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

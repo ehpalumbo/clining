@@ -51,6 +51,7 @@ impl ApiInvocationService {
             invocation.body.as_deref(),
             token.as_deref(),
             &invocation.headers,
+            &invocation.form_parts,
         )?;
         self.invoker.send(&request)
     }
@@ -130,6 +131,7 @@ mod tests {
             params,
             body,
             model.auth.clone(),
+            Vec::new(),
             Vec::new(),
         )
     }
@@ -287,6 +289,7 @@ mod tests {
             None,
             model.auth.clone(),
             vec![custom_header("authorization", "Token override")],
+            Vec::new(),
         );
 
         let resp = svc.invoke(&invocation).unwrap();
@@ -324,6 +327,7 @@ mod tests {
             None,
             model.auth.clone(),
             vec![custom_header("Authorization", "Basic abc")],
+            Vec::new(),
         );
 
         svc.invoke(&invocation).unwrap();
@@ -352,6 +356,7 @@ mod tests {
             None,
             model.auth.clone(),
             vec![custom_header("X-Trace", "abc")],
+            Vec::new(),
         );
 
         let err = svc.invoke(&invocation).unwrap_err();

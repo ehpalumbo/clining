@@ -52,12 +52,12 @@ The spec source may be a local file path or an `http(s)://` URI. `--base-url` ov
 ### Invoke endpoints as commands
 
 ```bash
-clining <my-api-name> <command-group> <command> --<param> <value> [--<param> <value>]... [-H "Name: value"]... [< body-file]
+clining <my-api-name> <command-group> <command> --<param> <value> [--<param> <value>]... [-H "Name: value"]... [-F "<field>=<value>" | "<field>=@<path>"]... [< body-file]
 ```
 
 - Path parameters are required; query parameters are optional unless marked required.
 - Repeating a parameter is allowed and produces repeated query keys (`--tag a --tag b` → `?tag=a&tag=b`).
-- The request body is read from stdin when the operation declares one.
+- The request body is read from stdin when the operation declares one. Commands whose body is `multipart/form-data` instead accept `-F` form parts (see below).
 - The response body is written to stdout byte-exact; the HTTP status line and response headers go to stderr.
 - Exit code is `0` for 2xx responses and `1` for any non-2xx response. All errors print a one-line `error: ...` to stderr and exit non-zero.
 
@@ -82,6 +82,24 @@ clining pets pets get-pet --pet-id 42 \
 - If an API path or query parameter itself canonicalizes to `--clining-header`, that parameter keeps the long form and the custom-header flag falls back to `-H` only. An API parameter canonicalized to `--header` is unaffected.
 
 Header values appear in the process argument list, so they may be visible in process listings and shell history. Prefer referencing secrets from the stored Bearer token source when possible; passing literal secrets with `-H` is at your own risk.
+
+#### Multipart file uploads
+
+Commands whose request body declares `multipart/form-data` accept repeatable `-F` parts:
+
+```bash
+clining uploads uploads create-upload \
+  -F "name=fluffy" \
+  -F "photo=@/tmp/cat.png" \
+  -F "photo=@/tmp/dog.png;type=image/png"
+```
+
+- `-F "<field>=<value>"` frames a text part; `-F "<field>=@<path>"` frames a file part with `filename` set to the basename of the path. File bytes are sent verbatim and files are read whole into memory.
+- An optional `;type=<content-type>` postfix on a file input overrides the per-part content type. Otherwise the type comes from the spec's `encoding.<field>.contentType` when documented, then from the schema (`format: binary` → `application/octet-stream`, objects → `application/json`), then from the input syntax.
+- clining generates a fresh boundary per invocation and emits `Content-Type: multipart/form-data; boundary=<boundary>`. Parts are framed in input order; repeating a field name produces repeated parts.
+- Piping stdin to a multipart command with no custom `Content-Type` is rejected with a pointer to `-F`. To send a raw body instead, supply your own content type: `... -H "Content-Type: application/json" < body.json`. Combining `-F` with a custom `Content-Type` is rejected as ambiguous.
+- Malformed parts, unreadable files, and unsafe field/filename characters fail with one `error:` line and exit `1` before any request is sent.
+- Presence-only validation still applies: spec-documented required parts are shown in `--help` but are not enforced. Models installed before multipart metadata was captured still accept `-F`; re-install to gain spec-derived per-part content types in help and on the wire.
 
 ### Discover commands
 

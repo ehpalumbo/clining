@@ -22,6 +22,16 @@ pub fn fixture_spec() -> String {
     fs::read_to_string(fixture_path()).unwrap()
 }
 
+/// Absolute path to the multipart upload fixture spec.
+pub fn multipart_fixture_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/multipart-upload.json")
+}
+
+/// Contents of the multipart upload fixture spec.
+pub fn multipart_fixture_spec() -> String {
+    fs::read_to_string(multipart_fixture_path()).unwrap()
+}
+
 /// Creates a fresh isolated store directory.
 pub fn temp_dir(tag: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("clining-e2e-{tag}-{}", std::process::id()));
@@ -92,6 +102,24 @@ pub fn install(dir: &Path, name: &str, base_url: Option<&str>) -> Output {
         args.push(&base);
     }
     run_cli(dir, &args, None)
+}
+
+/// Installs the multipart upload fixture under `name`.
+pub fn install_multipart(dir: &Path, name: &str, base_url: &str) -> Output {
+    let spec = dir.join("multipart-spec.json");
+    fs::write(&spec, multipart_fixture_spec()).unwrap();
+    let base = format!("--base-url={base_url}");
+    run_cli(
+        dir,
+        &[
+            "api",
+            "install",
+            name,
+            spec.to_str().unwrap(),
+            base.as_str(),
+        ],
+        None,
+    )
 }
 
 /// Returns the request text sent to the mock server at a given connection index.
@@ -165,6 +193,8 @@ impl MockServer {
                     (200, b"{\"id\":42}")
                 } else if request_line.starts_with("POST /pets") {
                     (201, b"{\"id\":7}")
+                } else if request_line.starts_with("POST /uploads") {
+                    (201, b"{\"uploadId\":9}")
                 } else if request_line.starts_with("POST /store/orders") {
                     (200, b"{\"orderId\":1}")
                 } else {

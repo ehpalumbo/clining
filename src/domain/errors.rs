@@ -31,6 +31,9 @@ pub enum DomainError {
     #[error("invalid header: {message}")]
     Header { message: String },
 
+    #[error("invalid form part: {message}")]
+    Form { message: String },
+
     #[error("network error: {message}")]
     Network { message: String },
 
