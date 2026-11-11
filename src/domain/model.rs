@@ -7,6 +7,7 @@ use serde_with::skip_serializing_none;
 
 use crate::domain::errors::DomainError;
 use crate::domain::headers::CustomHeader;
+use crate::domain::multipart::FormPart;
 
 /// Version marker for the persisted model format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -88,6 +89,38 @@ pub struct BodySpec {
     pub content_type: String,
     pub description: Option<String>,
     pub schema: Option<SchemaSpec>,
+    /// Multipart part metadata captured at install time. `None` for every
+    /// non-multipart body and for multipart bodies whose schema could not be
+    /// resolved to a documented object (loose specs). Absence is compatible
+    /// with model files written before this field existed.
+    #[serde(default)]
+    pub parts: Option<Vec<PartSpec>>,
+}
+
+/// How a multipart part is expected to be filled, derived from the spec. This
+/// is display/resolution metadata only: the input syntax (`@path` versus a
+/// plain value) decides how a part is framed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PartKind {
+    Text,
+    File,
+    Object,
+}
+
+/// Captured metadata for one documented multipart part.
+#[skip_serializing_none]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PartSpec {
+    /// Original property name from the spec (matched case-sensitively).
+    pub name: String,
+    /// Whether the body object lists this part in its `required` array.
+    pub required: bool,
+    pub kind: PartKind,
+    /// Whether the property is an array (the input may repeat the part).
+    pub repeated: bool,
+    /// Raw `encoding.<name>.contentType` when the spec declares one.
+    pub content_type: Option<String>,
 }
 
 /// An operation response body captured by status code and content type.
@@ -197,6 +230,8 @@ pub struct ApiInvocationRequest<'m> {
     pub body: Option<Vec<u8>>,
     pub auth: Option<AuthConfig>,
     pub headers: Vec<CustomHeader>,
+    /// Multipart form parts with file bytes already materialized by infra.
+    pub form_parts: Vec<FormPart>,
 }
 
 impl<'m> ApiInvocationRequest<'m> {
@@ -207,6 +242,7 @@ impl<'m> ApiInvocationRequest<'m> {
         body: Option<Vec<u8>>,
         auth: Option<AuthConfig>,
         headers: Vec<CustomHeader>,
+        form_parts: Vec<FormPart>,
     ) -> Self {
         Self {
             base_url,
@@ -215,6 +251,7 @@ impl<'m> ApiInvocationRequest<'m> {
             body,
             auth,
             headers,
+            form_parts,
         }
     }
 }
@@ -296,5 +333,35 @@ mod tests {
                 .contains("reserved command group name 'api'"),
             "{err}"
         );
+    }
+
+    #[test]
+    fn old_body_specs_without_parts_deserialize_and_omit_parts() {
+        let json = r#"{"required":true,"content_type":"application/json","schema":null}"#;
+        let body: BodySpec = serde_json::from_str(json).unwrap();
+        assert!(body.parts.is_none());
+        let serialized = serde_json::to_string(&body).unwrap();
+        assert!(!serialized.contains("parts"), "{serialized}");
+    }
+
+    #[test]
+    fn multipart_part_metadata_survives_a_serde_round_trip() {
+        let body = BodySpec {
+            required: true,
+            content_type: "multipart/form-data".to_owned(),
+            description: None,
+            schema: None,
+            parts: Some(vec![PartSpec {
+                name: "photo".to_owned(),
+                required: false,
+                kind: PartKind::File,
+                repeated: true,
+                content_type: Some("image/jpeg".to_owned()),
+            }]),
+        };
+        let serialized = serde_json::to_string(&body).unwrap();
+        let round_trip: BodySpec = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(round_trip, body);
+        assert!(serialized.contains("\"kind\":\"file\""), "{serialized}");
     }
 }

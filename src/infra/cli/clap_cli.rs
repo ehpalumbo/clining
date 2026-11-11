@@ -3,7 +3,9 @@
 //! once the installed model is loaded.
 
 use std::collections::HashMap;
+use std::fs;
 use std::io::{IsTerminal, Read, Write};
+use std::path::Path;
 use std::process::ExitCode;
 
 use clap::{Arg, ArgAction, Command};
@@ -14,6 +16,9 @@ use crate::application::auth::auth_from_options;
 use crate::domain::errors::DomainError;
 use crate::domain::headers::CustomHeader;
 use crate::domain::model::{ApiInvocationRequest, ApiModel, ApiOperation, ApiOperationGroup};
+use crate::domain::multipart::{
+    FormInput, FormInputValue, FormPart, FormPartValue, is_multipart_form_data, validate_filename,
+};
 use crate::infra::cli::help::{command_after_help, param_help_text};
 
 /// Internal clap argument ID for custom headers. Kebab-casing never emits
@@ -22,6 +27,13 @@ const CUSTOM_HEADER_ARG_ID: &str = "clining_header";
 /// Long name for the custom-header flag when the operation does not claim it.
 const CUSTOM_HEADER_LONG: &str = "clining-header";
 const CUSTOM_HEADER_HELP: &str = "Custom header as 'Name: value' (repeatable; sends separate lines and overrides generated headers).";
+
+/// Internal clap argument ID for multipart form parts. The underscore keeps it
+/// disjoint from every kebab-cased parameter ID.
+const CUSTOM_FORM_ARG_ID: &str = "clining_form";
+/// Long name for the form-part flag when the operation does not claim it.
+const CUSTOM_FORM_LONG: &str = "clining-form";
+const CUSTOM_FORM_HELP: &str = "Multipart form part as '<field>=<value>' for text or '<field>=@<path>[;type=<content-type>]' for a file (repeatable).";
 
 /// Builds the full CLI command tree: the static `api` management group plus,
 /// when a model is provided, the installed API as a nested subcommand tree.
@@ -199,6 +211,27 @@ fn api_command(model: &ApiModel) -> Command {
                 custom_header_arg = custom_header_arg.long(CUSTOM_HEADER_LONG);
             }
             command_cmd = command_cmd.arg(custom_header_arg);
+            let multipart = operation
+                .request_body
+                .as_ref()
+                .is_some_and(|body| is_multipart_form_data(&body.content_type));
+            let mut form_arg = Arg::new(CUSTOM_FORM_ARG_ID)
+                .short('F')
+                .value_name("FORM")
+                .action(ArgAction::Append)
+                .num_args(1)
+                .help(CUSTOM_FORM_HELP);
+            if multipart {
+                if !operation_claims_clining_form(operation) {
+                    form_arg = form_arg.long(CUSTOM_FORM_LONG);
+                }
+            } else {
+                // Accepted but hidden: using -F on a non-multipart command
+                // reaches the request builder's semantic error instead of a
+                // generic clap "unexpected argument" message.
+                form_arg = form_arg.hide(true);
+            }
+            command_cmd = command_cmd.arg(form_arg);
             command_cmd = command_cmd.after_long_help(command_after_help(model, operation));
             group_cmd = group_cmd.subcommand(command_cmd);
         }
@@ -210,11 +243,21 @@ fn api_command(model: &ApiModel) -> Command {
 /// Returns whether a path or query parameter already owns the long name used
 /// by the custom-header flag.
 fn operation_claims_clining_header(operation: &ApiOperation) -> bool {
+    operation_claims_long_name(operation, CUSTOM_HEADER_LONG)
+}
+
+/// Returns whether a path or query parameter already owns the long name used
+/// by the form-part flag.
+fn operation_claims_clining_form(operation: &ApiOperation) -> bool {
+    operation_claims_long_name(operation, CUSTOM_FORM_LONG)
+}
+
+fn operation_claims_long_name(operation: &ApiOperation, long_name: &str) -> bool {
     operation
         .path_params
         .iter()
         .chain(&operation.query_params)
-        .any(|param| param.canonical_name == CUSTOM_HEADER_LONG)
+        .any(|param| param.canonical_name == long_name)
 }
 
 /// Long help for an operation command: the summary followed by the operation
@@ -454,6 +497,36 @@ impl CliApp {
             }
             None => Vec::new(),
         };
+        // Parse and materialize form parts before reading stdin: malformed
+        // input or an unreadable file must fail without consuming the body.
+        let form_parts = match command_matches
+            .and_then(|m| m.try_get_many::<String>(CUSTOM_FORM_ARG_ID).ok().flatten())
+        {
+            Some(values) => {
+                let mut inputs = Vec::new();
+                for raw in values {
+                    match FormInput::parse(raw) {
+                        Ok(input) => inputs.push(input),
+                        Err(err) => {
+                            eprintln!("error: {err}");
+                            return ExitCode::FAILURE;
+                        }
+                    }
+                }
+                let mut parts = Vec::new();
+                for input in inputs {
+                    match materialize_form_part(input) {
+                        Ok(part) => parts.push(part),
+                        Err(err) => {
+                            eprintln!("error: {err}");
+                            return ExitCode::FAILURE;
+                        }
+                    }
+                }
+                parts
+            }
+            None => Vec::new(),
+        };
         // Read the request body from stdin, if any.
         let body = read_stdin_body();
         // Invoke the command using the service, passing the resolved request.
@@ -466,6 +539,7 @@ impl CliApp {
             body,
             model.auth.clone(),
             headers,
+            form_parts,
         );
         let response = match self.invoker.invoke(&invocation) {
             Ok(response) => response,
@@ -559,6 +633,38 @@ fn write_response_body(bytes: &[u8]) -> bool {
         Err(err) => {
             eprintln!("error: failed to write response body: {err}");
             false
+        }
+    }
+}
+
+/// Materializes one parsed `-F` input: text values pass through, file inputs
+/// are read whole and labeled with the basename of the supplied path.
+fn materialize_form_part(input: FormInput) -> Result<FormPart, DomainError> {
+    match input.value {
+        FormInputValue::Text(value) => Ok(FormPart {
+            name: input.name,
+            value: FormPartValue::Text(value),
+        }),
+        FormInputValue::File { path, content_type } => {
+            let bytes = fs::read(&path).map_err(|err| DomainError::Io {
+                message: format!(
+                    "failed to read form file '{path}' for part '{}': {err}",
+                    input.name
+                ),
+            })?;
+            let filename = Path::new(&path)
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| path.clone());
+            validate_filename(&filename)?;
+            Ok(FormPart {
+                name: input.name,
+                value: FormPartValue::File {
+                    filename,
+                    bytes,
+                    content_type,
+                },
+            })
         }
     }
 }
@@ -662,6 +768,7 @@ mod tests {
                             properties: BTreeMap::new(),
                             extra_json: None,
                         }),
+                        parts: None,
                     }),
                     responses: vec![],
                 }],
@@ -715,6 +822,7 @@ mod tests {
                         schema: Some(SchemaSpec::Ref {
                             ref_id: "Order".to_owned(),
                         }),
+                        parts: None,
                     }),
                     responses: vec![ResponseSpec {
                         status_code: "200".to_owned(),
@@ -1378,5 +1486,83 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["X-Custom: yes"]
         );
+    }
+
+    fn multipart_model() -> ApiModel {
+        let mut model = sample_model();
+        model.operation_groups[0].operations[0].request_body = Some(BodySpec {
+            required: true,
+            content_type: "multipart/form-data".to_owned(),
+            description: None,
+            schema: None,
+            parts: None,
+        });
+        model
+    }
+
+    #[test]
+    fn custom_form_flag_is_registered_only_for_multipart_bodies() {
+        let mut non_multipart = get_pet_command(&sample_model());
+        let help = non_multipart.render_long_help().to_string();
+        assert!(!help.contains("--clining-form"), "{help}");
+
+        let model = multipart_model();
+        let mut command = get_pet_command(&model);
+        command.clone().debug_assert();
+        let help = command.render_long_help().to_string();
+        assert!(help.contains("-F, --clining-form <FORM>"), "{help}");
+    }
+
+    #[test]
+    fn custom_form_flag_collects_occurrences_in_order() {
+        let model = multipart_model();
+        let cmd = build_cli_command(Some(&model));
+        cmd.clone().debug_assert();
+        let matches = cmd
+            .try_get_matches_from([
+                "clining",
+                "pets",
+                "pets",
+                "get-pet",
+                "--pet-id",
+                "42",
+                "-F",
+                "name=fluffy",
+                "-F",
+                "photo=@/tmp/p;type=image/png",
+                "-H",
+                "A: 1",
+            ])
+            .unwrap();
+        let command = matches
+            .subcommand_matches("pets")
+            .unwrap()
+            .subcommand_matches("pets")
+            .unwrap()
+            .subcommand_matches("get-pet")
+            .unwrap();
+        assert_eq!(
+            command
+                .get_many::<String>(CUSTOM_FORM_ARG_ID)
+                .unwrap()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            vec!["name=fluffy", "photo=@/tmp/p;type=image/png"]
+        );
+    }
+
+    #[test]
+    fn api_parameter_named_clining_form_keeps_long_name_and_f_remains_short_only() {
+        let mut model = multipart_model();
+        model.operation_groups[0].operations[0].query_params[0].canonical_name =
+            CUSTOM_FORM_LONG.to_owned();
+        model.operation_groups[0].operations[0].query_params[0].name = CUSTOM_FORM_LONG.to_owned();
+
+        let cmd = get_pet_command(&model);
+        cmd.clone().debug_assert();
+        let help = cmd.clone().render_long_help().to_string();
+        assert!(help.contains("--clining-form"), "{help}");
+        assert!(help.contains("-F <FORM>"), "{help}");
+        assert!(!help.contains("-F, --clining-form"), "{help}");
     }
 }

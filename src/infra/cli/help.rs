@@ -9,8 +9,10 @@
 use std::fmt::Write;
 
 use crate::domain::model::{
-    ApiModel, ApiOperation, BodySpec, CompositeKind, Param, ResponseSpec, SchemaSpec,
+    ApiModel, ApiOperation, BodySpec, CompositeKind, Param, PartKind, PartSpec, ResponseSpec,
+    SchemaSpec,
 };
+use crate::domain::multipart::{is_multipart_form_data, resolve_part_content_type};
 use crate::infra::openapi::parser::parse_schema_value;
 
 /// Renders the long-form input/output documentation shown under a command's
@@ -125,15 +127,126 @@ fn render_request_body(model: &ApiModel, body: &BodySpec, text: &mut String) {
             let _ = writeln!(text, "{header}");
         }
     }
+    let multipart = is_multipart_form_data(&body.content_type);
+    if multipart {
+        let _ = writeln!(
+            text,
+            "  Parts: -F '<field>=<value>' for text, -F '<field>=@<path>' for files (optional ';type=<content-type>')"
+        );
+        if let Some(parts) = &body.parts {
+            for part in parts {
+                render_part(part, text);
+            }
+        }
+    }
     match &body.schema {
         // No label: the schema already sits under the content type, and a
         // "body" key here could be mistaken for a wrapper property of the
         // JSON payload.
-        Some(schema) => render_schema_entry(model, schema, "", 2, false, &mut Vec::new(), text),
+        Some(schema) => {
+            let mut schema_text = String::new();
+            render_schema_entry(
+                model,
+                schema,
+                "",
+                2,
+                false,
+                &mut Vec::new(),
+                &mut schema_text,
+            );
+            if multipart && body.parts.is_none() {
+                annotate_file_parts(&mut schema_text, &file_part_names(model, schema));
+            }
+            text.push_str(&schema_text);
+        }
         None => {
             let _ = writeln!(text, "    schema not documented");
         }
     }
+}
+
+/// Renders one documented multipart part: name, inferred kind, requiredness,
+/// repeatability, and the content type that would be sent by default.
+fn render_part(part: &PartSpec, text: &mut String) {
+    let kind = match part.kind {
+        PartKind::Text => "text",
+        PartKind::File => "file upload",
+        PartKind::Object => "JSON field",
+    };
+    let mut flags = vec![if part.required {
+        "required".to_owned()
+    } else {
+        "optional".to_owned()
+    }];
+    if part.repeated {
+        flags.push("repeatable".to_owned());
+    }
+    if let Some(content_type) = resolve_part_content_type(part.kind, None, Some(part)) {
+        flags.push(format!("content-type: {content_type}"));
+    }
+    let _ = writeln!(text, "    {}: {} ({})", part.name, kind, flags.join("; "));
+}
+
+/// Names of properties documented as `string` + `format: binary`, used to
+/// annotate help when part metadata is absent (loose specs or models installed
+/// before part metadata existed).
+fn file_part_names(model: &ApiModel, schema: &SchemaSpec) -> Vec<String> {
+    let mut seen = Vec::new();
+    let target = match schema {
+        SchemaSpec::Ref { ref_id } => match resolve_ref(model, ref_id, &seen) {
+            RefResolution::Target { chain, schema } => {
+                seen.extend(chain);
+                schema
+            }
+            RefResolution::Recursive | RefResolution::Unresolved => return Vec::new(),
+        },
+        other => other,
+    };
+    let SchemaSpec::Object { properties, .. } = target else {
+        return Vec::new();
+    };
+    properties
+        .iter()
+        .filter(|(_, property)| is_binary_string_schema(model, property))
+        .map(|(name, _)| name.clone())
+        .collect()
+}
+
+fn is_binary_string_schema(model: &ApiModel, schema: &SchemaSpec) -> bool {
+    let target = match schema {
+        SchemaSpec::Ref { ref_id } => match resolve_ref(model, ref_id, &[]) {
+            RefResolution::Target { schema, .. } => schema,
+            RefResolution::Recursive | RefResolution::Unresolved => return false,
+        },
+        other => other,
+    };
+    let SchemaSpec::Primitive { raw_json } = target else {
+        return false;
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(raw_json) else {
+        return false;
+    };
+    value.get("type").and_then(serde_json::Value::as_str) == Some("string")
+        && value.get("format").and_then(serde_json::Value::as_str) == Some("binary")
+}
+
+fn annotate_file_parts(text: &mut String, names: &[String]) {
+    if names.is_empty() {
+        return;
+    }
+    let mut annotated = String::with_capacity(text.len());
+    for line in text.lines() {
+        annotated.push_str(line);
+        let trimmed = line.trim_start();
+        if names
+            .iter()
+            .any(|name| trimmed.starts_with(&format!("{name}: ")))
+        {
+            annotated.push_str(" (file part)");
+        }
+        annotated.push('\n');
+    }
+    *text = annotated;
 }
 
 fn render_response(model: &ApiModel, response: &ResponseSpec, text: &mut String) {
@@ -791,6 +904,7 @@ mod tests {
             schema: Some(SchemaSpec::Ref {
                 ref_id: "Order".to_owned(),
             }),
+            parts: None,
         }
     }
 
@@ -834,6 +948,7 @@ mod tests {
             schema: Some(SchemaSpec::Ref {
                 ref_id: "Order".to_owned(),
             }),
+            parts: None,
         };
         let help = command_after_help(&model, &operation(vec![], vec![], Some(body), vec![]));
 
@@ -887,6 +1002,7 @@ mod tests {
             schema: Some(SchemaSpec::Ref {
                 ref_id: "Cart".to_owned(),
             }),
+            parts: None,
         };
         let help = command_after_help(&model, &operation(vec![], vec![], Some(body), vec![]));
 
@@ -918,6 +1034,7 @@ mod tests {
             schema: Some(SchemaSpec::Ref {
                 ref_id: "Node".to_owned(),
             }),
+            parts: None,
         };
         let help = command_after_help(&model, &operation(vec![], vec![], Some(body), vec![]));
 
@@ -964,6 +1081,7 @@ mod tests {
             schema: Some(SchemaSpec::Ref {
                 ref_id: "Alias".to_owned(),
             }),
+            parts: None,
         };
         let help = command_after_help(&model, &operation(vec![], vec![], Some(body), vec![]));
 
@@ -1003,6 +1121,7 @@ mod tests {
             content_type: "application/json".to_owned(),
             description: None,
             schema: Some(schema),
+            parts: None,
         };
         let help = command_after_help(&model, &operation(vec![], vec![], Some(body), vec![]));
 
@@ -1043,6 +1162,7 @@ mod tests {
             schema: Some(SchemaSpec::Ref {
                 ref_id: "Extended".to_owned(),
             }),
+            parts: None,
         };
         let help = command_after_help(&model, &operation(vec![], vec![], Some(body), vec![]));
 
@@ -1152,6 +1272,7 @@ mod tests {
             schema: Some(SchemaSpec::Ref {
                 ref_id: "Missing".to_owned(),
             }),
+            parts: None,
         };
         let help = command_after_help(&model, &operation(vec![], vec![], Some(body), vec![]));
         assert!(help.contains("Missing (unresolved reference)"), "{help}");
@@ -1162,6 +1283,7 @@ mod tests {
             content_type: "application/json".to_owned(),
             description: None,
             schema: None,
+            parts: None,
         };
         let help = command_after_help(&model, &operation(vec![], vec![], Some(no_schema), vec![]));
         assert!(help.contains("schema not documented"), "{help}");
@@ -1179,6 +1301,7 @@ mod tests {
                 )]),
                 Some(r#"{"required":["missing"]}"#.to_owned()),
             )),
+            parts: None,
         };
         let help = command_after_help(
             &model,
@@ -1309,6 +1432,7 @@ mod tests {
                 )]),
                 None,
             )),
+            parts: None,
         };
         let help = command_after_help(&model, &operation(vec![], vec![], Some(body), vec![]));
         assert!(help.contains("tags: array<string> ["), "{help}");
@@ -1326,9 +1450,89 @@ mod tests {
             schema: Some(SchemaSpec::Unknown {
                 raw_json: r#"{"x-extension":true}"#.to_owned(),
             }),
+            parts: None,
         };
         let help = command_after_help(&model, &operation(vec![], vec![], Some(body), vec![]));
         assert!(help.contains("\n    unknown"), "{help}");
         assert!(!help.contains("x-extension"), "{help}");
+    }
+
+    fn multipart_schema() -> SchemaSpec {
+        object(
+            BTreeMap::from([
+                ("name".to_owned(), primitive(r#"{"type":"string"}"#)),
+                (
+                    "photo".to_owned(),
+                    primitive(r#"{"type":"string","format":"binary"}"#),
+                ),
+            ]),
+            Some(r#"{"required":["name"]}"#.to_owned()),
+        )
+    }
+
+    fn multipart_body(parts: Option<Vec<PartSpec>>) -> BodySpec {
+        BodySpec {
+            required: true,
+            content_type: "multipart/form-data".to_owned(),
+            description: None,
+            schema: Some(multipart_schema()),
+            parts,
+        }
+    }
+
+    #[test]
+    fn multipart_help_renders_guidance_and_part_metadata() {
+        let model = model_with_registry(BTreeMap::new());
+        let body = multipart_body(Some(vec![
+            PartSpec {
+                name: "name".to_owned(),
+                required: true,
+                kind: PartKind::Text,
+                repeated: false,
+                content_type: None,
+            },
+            PartSpec {
+                name: "photo".to_owned(),
+                required: false,
+                kind: PartKind::File,
+                repeated: true,
+                content_type: Some("image/jpeg".to_owned()),
+            },
+        ]));
+        let help = command_after_help(&model, &operation(vec![], vec![], Some(body), vec![]));
+
+        assert!(help.contains("Parts: -F '<field>=<value>'"), "{help}");
+        assert!(help.contains("name: text (required)"), "{help}");
+        assert!(
+            help.contains("photo: file upload (optional; repeatable; content-type: image/jpeg)"),
+            "{help}"
+        );
+    }
+
+    #[test]
+    fn multipart_help_without_metadata_annotates_binary_properties() {
+        let model = model_with_registry(BTreeMap::new());
+        let help = command_after_help(
+            &model,
+            &operation(vec![], vec![], Some(multipart_body(None)), vec![]),
+        );
+
+        assert!(help.contains("Parts: -F '<field>=<value>'"), "{help}");
+        assert!(
+            help.contains("photo: string (format: binary) (file part)"),
+            "{help}"
+        );
+        assert!(help.contains("name: string"), "{help}");
+        assert!(!help.contains("name: string (file part)"), "{help}");
+    }
+
+    #[test]
+    fn non_multipart_help_has_no_form_guidance() {
+        let model = model_with_registry(order_registry());
+        let help = command_after_help(
+            &model,
+            &operation(vec![], vec![], Some(place_order_body()), vec![]),
+        );
+        assert!(!help.contains("Parts: -F"), "{help}");
     }
 }
