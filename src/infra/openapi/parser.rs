@@ -10,8 +10,9 @@ use crate::domain::command_name::{cli_name, command_name, disambiguate};
 use crate::domain::errors::DomainError;
 use crate::domain::model::{
     ApiModel, ApiOperation, ApiOperationGroup, BodySpec, CompositeKind, HttpMethod, ModelVersion,
-    Param, ResponseSpec, SchemaSpec,
+    Param, PartKind, PartSpec, ResponseSpec, SchemaSpec,
 };
+use crate::domain::multipart::is_multipart_form_data;
 
 /// Adapter that parses OpenAPI 3.0.x JSON into a domain `ApiModel`.
 pub struct Parser;
@@ -111,9 +112,13 @@ impl Parser {
                         i
                     }
                 };
-                operation_groups[idx]
-                    .operations
-                    .push(Self::build_operation(op, item, method, path));
+                operation_groups[idx].operations.push(Self::build_operation(
+                    op,
+                    item,
+                    method,
+                    path,
+                    &schema_registry,
+                ));
             }
         }
         for operation_group in &mut operation_groups {
@@ -172,6 +177,7 @@ impl Parser {
         item: &PathItem,
         method: HttpMethod,
         path: &str,
+        schema_registry: &BTreeMap<String, SchemaSpec>,
     ) -> ApiOperation {
         let name = command_name(op.operation_id.as_deref(), method, path);
         let params = Self::merged_parameters(item, op);
@@ -185,7 +191,10 @@ impl Parser {
             .filter(|p| p.location == "query")
             .map(Self::to_param)
             .collect();
-        let request_body = op.request_body.as_ref().map(Self::to_body_spec);
+        let request_body = op
+            .request_body
+            .as_ref()
+            .map(|rb| Self::to_body_spec(rb, schema_registry));
         let responses = op
             .responses
             .as_ref()
@@ -236,18 +245,149 @@ impl Parser {
         }
     }
 
-    fn to_body_spec(rb: &RequestBody) -> BodySpec {
-        let (content_type, media) = match rb.content.iter().next() {
-            Some((ct, mt)) => (ct.clone(), mt),
-            None => ("application/json".to_owned(), &MediaType { schema: None }),
+    fn to_body_spec(rb: &RequestBody, schema_registry: &BTreeMap<String, SchemaSpec>) -> BodySpec {
+        let empty = MediaType {
+            schema: None,
+            encoding: None,
         };
+        let (content_type, media) = rb.content.iter().next().map_or_else(
+            || ("application/json".to_owned(), &empty),
+            |(content_type, media)| (content_type.clone(), media),
+        );
         let schema = media.schema.as_ref().map(Self::parse_schema);
+        let parts = if is_multipart_form_data(&content_type) {
+            media.schema.as_ref().and_then(|schema| {
+                Self::to_part_specs(schema, schema_registry, media.encoding.as_ref())
+            })
+        } else {
+            None
+        };
         BodySpec {
             required: rb.required.unwrap_or(false),
             content_type,
             description: rb.description.clone(),
             schema,
+            parts,
         }
+    }
+
+    /// Derives per-part metadata for a multipart body. Returns `None` when the
+    /// schema is not a resolvable object with documented properties (loose
+    /// specs still enable `-F`, they just get no metadata).
+    fn to_part_specs(
+        schema: &serde_json::Value,
+        schema_registry: &BTreeMap<String, SchemaSpec>,
+        encoding: Option<&BTreeMap<String, super::spec::MediaTypeEncoding>>,
+    ) -> Option<Vec<PartSpec>> {
+        let parsed = Self::parse_schema(schema);
+        let resolved = Self::resolve_schema(&parsed, schema_registry, &mut Vec::new())?;
+        let SchemaSpec::Object {
+            properties,
+            extra_json,
+        } = resolved
+        else {
+            return None;
+        };
+        if properties.is_empty() {
+            return None;
+        }
+        let required = Self::required_property_names(extra_json.as_deref());
+        let parts = properties
+            .iter()
+            .map(|(name, property)| {
+                let (kind, repeated) = Self::part_kind(property, schema_registry);
+                let content_type = encoding
+                    .and_then(|encoding| encoding.get(name))
+                    .and_then(|encoding| encoding.content_type.clone());
+                PartSpec {
+                    name: name.clone(),
+                    required: required.iter().any(|required| required == name),
+                    kind,
+                    repeated,
+                    content_type,
+                }
+            })
+            .collect();
+        Some(parts)
+    }
+
+    /// Follows local `$ref` aliases until a concrete schema is reached.
+    fn resolve_schema<'a>(
+        schema: &'a SchemaSpec,
+        registry: &'a BTreeMap<String, SchemaSpec>,
+        seen: &mut Vec<String>,
+    ) -> Option<&'a SchemaSpec> {
+        match schema {
+            SchemaSpec::Ref { ref_id } => {
+                if seen.iter().any(|seen_id| seen_id == ref_id) {
+                    return None;
+                }
+                seen.push(ref_id.clone());
+                let target = registry.get(ref_id)?;
+                let resolved = Self::resolve_schema(target, registry, seen);
+                seen.pop();
+                resolved
+            }
+            other => Some(other),
+        }
+    }
+
+    /// Classifies a property by its schema kind; array properties are marked
+    /// repeated and classified by their item schema.
+    fn part_kind(schema: &SchemaSpec, registry: &BTreeMap<String, SchemaSpec>) -> (PartKind, bool) {
+        let mut seen = Vec::new();
+        match Self::resolve_schema(schema, registry, &mut seen) {
+            Some(SchemaSpec::Array { items, .. }) => {
+                let kind = items
+                    .as_deref()
+                    .map(|items| Self::base_part_kind(items, registry))
+                    .unwrap_or(PartKind::Text);
+                (kind, true)
+            }
+            Some(resolved) => (Self::base_part_kind(resolved, registry), false),
+            None => (PartKind::Text, false),
+        }
+    }
+
+    fn base_part_kind(schema: &SchemaSpec, registry: &BTreeMap<String, SchemaSpec>) -> PartKind {
+        let mut seen = Vec::new();
+        match Self::resolve_schema(schema, registry, &mut seen) {
+            Some(SchemaSpec::Object { .. }) => PartKind::Object,
+            Some(SchemaSpec::Primitive { raw_json }) => {
+                let value: serde_json::Value =
+                    serde_json::from_str(raw_json).unwrap_or(serde_json::Value::Null);
+                let is_string =
+                    value.get("type").and_then(serde_json::Value::as_str) == Some("string");
+                let is_binary =
+                    value.get("format").and_then(serde_json::Value::as_str) == Some("binary");
+                if is_string && is_binary {
+                    PartKind::File
+                } else {
+                    PartKind::Text
+                }
+            }
+            _ => PartKind::Text,
+        }
+    }
+
+    fn required_property_names(extra_json: Option<&str>) -> Vec<String> {
+        let Some(raw) = extra_json else {
+            return Vec::new();
+        };
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) else {
+            return Vec::new();
+        };
+        value
+            .get("required")
+            .and_then(serde_json::Value::as_array)
+            .map(|values| {
+                values
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     /// Flattens an operation's responses into one `ResponseSpec` per
@@ -969,5 +1109,140 @@ mod tests {
             model.schema_by_ref_id("FreeForm").unwrap(),
             SchemaSpec::Unknown { .. }
         ));
+    }
+
+    fn multipart_spec(body_schema: &str, encoding: &str) -> String {
+        format!(
+            r##"{{
+                "openapi": "3.0.0",
+                "components": {{
+                    "schemas": {{
+                        "Upload": {{
+                            "type": "object",
+                            "required": ["name"],
+                            "properties": {{
+                                "name": {{ "type": "string" }},
+                                "photo": {{ "type": "string", "format": "binary" }},
+                                "attachments": {{ "type": "array", "items": {{ "type": "string", "format": "binary" }} }},
+                                "meta": {{ "type": "object", "properties": {{ "tag": {{ "type": "string" }} }} }}
+                            }}
+                        }}
+                    }}
+                }},
+                "paths": {{
+                    "/uploads": {{
+                        "post": {{
+                            "operationId": "createUpload",
+                            "requestBody": {{
+                                "required": true,
+                                "content": {{
+                                    "multipart/form-data": {{
+                                        "schema": {body_schema},
+                                        "encoding": {encoding}
+                                    }}
+                                }}
+                            }},
+                            "responses": {{ "201": {{ "description": "Created" }} }}
+                        }}
+                    }}
+                }}
+            }}"##
+        )
+    }
+
+    fn multipart_body(spec: &str) -> BodySpec {
+        let model = Parser.parse(spec.as_bytes()).unwrap();
+        model.operation_groups[0].operations[0]
+            .request_body
+            .clone()
+            .unwrap()
+    }
+
+    #[test]
+    fn captures_multipart_part_metadata_from_inline_object() {
+        let body = multipart_body(&multipart_spec(
+            r#"{ "type": "object", "required": ["name"], "properties": {
+                "name": { "type": "string" },
+                "photo": { "type": "string", "format": "binary" },
+                "attachments": { "type": "array", "items": { "type": "string", "format": "binary" } },
+                "meta": { "type": "object", "properties": { "tag": { "type": "string" } } }
+            } }"#,
+            r#"{ "photo": { "contentType": "image/jpeg" }, "name": { "contentType": "text/plain" } }"#,
+        ));
+        assert_eq!(body.content_type, "multipart/form-data");
+        let parts = body.parts.expect("part metadata");
+        let by_name = |name: &str| parts.iter().find(|part| part.name == name).unwrap();
+
+        assert_eq!(by_name("name").kind, PartKind::Text);
+        assert!(by_name("name").required);
+        assert!(!by_name("name").repeated);
+        assert_eq!(by_name("name").content_type.as_deref(), Some("text/plain"));
+
+        assert_eq!(by_name("photo").kind, PartKind::File);
+        assert!(!by_name("photo").required);
+        assert_eq!(by_name("photo").content_type.as_deref(), Some("image/jpeg"));
+
+        assert_eq!(by_name("attachments").kind, PartKind::File);
+        assert!(by_name("attachments").repeated);
+
+        assert_eq!(by_name("meta").kind, PartKind::Object);
+        assert!(by_name("meta").content_type.is_none());
+    }
+
+    #[test]
+    fn captures_multipart_part_metadata_from_a_local_ref() {
+        let body = multipart_body(&multipart_spec(
+            r##"{ "$ref": "#/components/schemas/Upload" }"##,
+            r#"{ "photo": { "contentType": "image/png" } }"#,
+        ));
+        let parts = body.parts.expect("part metadata");
+        assert_eq!(parts.len(), 4);
+        assert!(
+            parts
+                .iter()
+                .any(|part| part.name == "photo" && part.kind == PartKind::File)
+        );
+    }
+
+    #[test]
+    fn loose_or_unresolvable_multipart_schemas_have_no_part_metadata() {
+        let body = multipart_body(&multipart_spec(r#"{ "type": "string" }"#, "{}"));
+        assert!(body.parts.is_none());
+
+        let body = multipart_body(&multipart_spec(
+            r##"{ "$ref": "#/components/schemas/Missing" }"##,
+            "{}",
+        ));
+        assert!(body.parts.is_none());
+
+        let body = multipart_body(&multipart_spec(r#"{ "type": "object" }"#, "{}"));
+        assert!(body.parts.is_none());
+    }
+
+    #[test]
+    fn non_multipart_bodies_have_no_part_metadata() {
+        let spec = r##"{
+            "openapi": "3.0.0",
+            "paths": {
+                "/items": {
+                    "post": {
+                        "requestBody": {
+                            "content": {
+                                "application/json": {
+                                    "schema": { "type": "object", "properties": { "name": { "type": "string" } } },
+                                    "encoding": { "name": { "contentType": "text/plain" } }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }"##;
+        let model = Parser.parse(spec.as_bytes()).unwrap();
+        let body = model.operation_groups[0].operations[0]
+            .request_body
+            .as_ref()
+            .unwrap();
+        assert!(body.parts.is_none());
     }
 }
