@@ -13,6 +13,7 @@ use clap::{Arg, ArgAction, Command};
 use crate::application::api_invocation::ApiInvocationService;
 use crate::application::api_model::ApiModelService;
 use crate::application::auth::auth_from_options;
+use crate::application::request_builder::{form_stdin_conflict_error, validate_form_context};
 use crate::domain::errors::DomainError;
 use crate::domain::headers::CustomHeader;
 use crate::domain::model::{ApiInvocationRequest, ApiModel, ApiOperation, ApiOperationGroup};
@@ -33,7 +34,7 @@ const CUSTOM_HEADER_HELP: &str = "Custom header as 'Name: value' (repeatable; se
 const CUSTOM_FORM_ARG_ID: &str = "clining_form";
 /// Long name for the form-part flag when the operation does not claim it.
 const CUSTOM_FORM_LONG: &str = "clining-form";
-const CUSTOM_FORM_HELP: &str = "Multipart form part as '<field>=<value>' for text or '<field>=@<path>[;type=<content-type>]' for a file (repeatable).";
+const CUSTOM_FORM_HELP: &str = "Multipart form part as '<field>=<value>' for text or '<field>=@<path>[;type=<content-type>]' for a file (repeatable; a text value cannot start with '@').";
 
 /// Builds the full CLI command tree: the static `api` management group plus,
 /// when a model is provided, the installed API as a nested subcommand tree.
@@ -221,14 +222,13 @@ fn api_command(model: &ApiModel) -> Command {
                 .action(ArgAction::Append)
                 .num_args(1)
                 .help(CUSTOM_FORM_HELP);
-            if multipart {
-                if !operation_claims_clining_form(operation) {
-                    form_arg = form_arg.long(CUSTOM_FORM_LONG);
-                }
-            } else {
-                // Accepted but hidden: using -F on a non-multipart command
-                // reaches the request builder's semantic error instead of a
-                // generic clap "unexpected argument" message.
+            if !operation_claims_clining_form(operation) {
+                form_arg = form_arg.long(CUSTOM_FORM_LONG);
+            }
+            if !multipart {
+                // Registered but hidden: on non-multipart commands both `-F`
+                // and its long form reach the request builder's semantic error
+                // (exit 1) instead of a generic clap "unexpected argument".
                 form_arg = form_arg.hide(true);
             }
             command_cmd = command_cmd.arg(form_arg);
@@ -497,38 +497,55 @@ impl CliApp {
             }
             None => Vec::new(),
         };
-        // Parse and materialize form parts before reading stdin: malformed
-        // input or an unreadable file must fail without consuming the body.
-        let form_parts = match command_matches
+        // Parse `-F` inputs before reading stdin or any file so malformed
+        // input fails fast. Context errors (non-multipart command, custom
+        // Content-Type conflict) are also raised before materialization.
+        let mut form_inputs = Vec::new();
+        if let Some(values) = command_matches
             .and_then(|m| m.try_get_many::<String>(CUSTOM_FORM_ARG_ID).ok().flatten())
         {
-            Some(values) => {
-                let mut inputs = Vec::new();
-                for raw in values {
-                    match FormInput::parse(raw) {
-                        Ok(input) => inputs.push(input),
-                        Err(err) => {
-                            eprintln!("error: {err}");
-                            return ExitCode::FAILURE;
-                        }
+            for raw in values {
+                match FormInput::parse(raw) {
+                    Ok(input) => form_inputs.push(input),
+                    Err(err) => {
+                        eprintln!("error: {err}");
+                        return ExitCode::FAILURE;
                     }
                 }
-                let mut parts = Vec::new();
-                for input in inputs {
-                    match materialize_form_part(input) {
-                        Ok(part) => parts.push(part),
-                        Err(err) => {
-                            eprintln!("error: {err}");
-                            return ExitCode::FAILURE;
-                        }
-                    }
-                }
-                parts
             }
-            None => Vec::new(),
+        }
+        if let Err(err) = validate_form_context(operation, &headers, !form_inputs.is_empty()) {
+            eprintln!("error: {err}");
+            return ExitCode::FAILURE;
+        }
+        // With `-F` parts present, a piped stdin body is a conflict. Detect it
+        // without buffering the stream and fail before reading any form file.
+        if !form_inputs.is_empty() && stdin_has_data() {
+            eprintln!("error: {}", form_stdin_conflict_error(operation));
+            return ExitCode::FAILURE;
+        }
+        let form_parts = if form_inputs.is_empty() {
+            Vec::new()
+        } else {
+            let mut parts = Vec::new();
+            for input in form_inputs {
+                match materialize_form_part(input) {
+                    Ok(part) => parts.push(part),
+                    Err(err) => {
+                        eprintln!("error: {err}");
+                        return ExitCode::FAILURE;
+                    }
+                }
+            }
+            parts
         };
-        // Read the request body from stdin, if any.
-        let body = read_stdin_body();
+        // Read the request body from stdin, if any. Form parts are the sole
+        // body source when present.
+        let body = if form_parts.is_empty() {
+            read_stdin_body()
+        } else {
+            None
+        };
         // Invoke the command using the service, passing the resolved request.
         // The stored auth reference (if any) is cloned so the service can
         // resolve the token and attach the Bearer header.
@@ -646,17 +663,18 @@ fn materialize_form_part(input: FormInput) -> Result<FormPart, DomainError> {
             value: FormPartValue::Text(value),
         }),
         FormInputValue::File { path, content_type } => {
+            // Validate the framing text before the potentially large read.
+            let filename = Path::new(&path)
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| path.clone());
+            validate_filename(&filename)?;
             let bytes = fs::read(&path).map_err(|err| DomainError::Io {
                 message: format!(
                     "failed to read form file '{path}' for part '{}': {err}",
                     input.name
                 ),
             })?;
-            let filename = Path::new(&path)
-                .file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-                .unwrap_or_else(|| path.clone());
-            validate_filename(&filename)?;
             Ok(FormPart {
                 name: input.name,
                 value: FormPartValue::File {
@@ -667,6 +685,16 @@ fn materialize_form_part(input: FormInput) -> Result<FormPart, DomainError> {
             })
         }
     }
+}
+
+/// Returns whether stdin is a non-terminal stream with at least one byte.
+/// Used to reject `-F` plus a piped body without buffering the whole stream.
+fn stdin_has_data() -> bool {
+    if std::io::stdin().is_terminal() {
+        return false;
+    }
+    let mut byte = [0u8; 1];
+    matches!(std::io::stdin().read(&mut byte), Ok(n) if n > 0)
 }
 
 /// Returns the request body read from stdin, or None if stdin is empty or unreadable.
@@ -1505,6 +1533,20 @@ mod tests {
         let mut non_multipart = get_pet_command(&sample_model());
         let help = non_multipart.render_long_help().to_string();
         assert!(!help.contains("--clining-form"), "{help}");
+        // The long form is still accepted (hidden) so the builder's semantic
+        // body error wins over clap's usage error.
+        build_cli_command(Some(&sample_model()))
+            .try_get_matches_from([
+                "clining",
+                "pets",
+                "pets",
+                "get-pet",
+                "--pet-id",
+                "42",
+                "--clining-form",
+                "name=x",
+            ])
+            .expect("hidden long form parses on non-multipart commands");
 
         let model = multipart_model();
         let mut command = get_pet_command(&model);

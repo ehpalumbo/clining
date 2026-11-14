@@ -5,9 +5,11 @@
 //! byte-testable. File reading happens in infrastructure, before an invocation
 //! is built; this module only ever sees materialized bytes.
 //!
-//! Out of scope (deliberately): streaming, boundary/content collision
-//! renegotiation, per-part `encoding.headers` such as `Content-ID`, and
-//! escaping field names or filenames (unsafe characters are rejected instead).
+//! Out of scope (deliberately): streaming (file bytes are buffered whole and
+//! copied once more while framing, so peak memory is about twice the payload
+//! size), boundary/content collision renegotiation, per-part
+//! `encoding.headers` such as `Content-ID`, and escaping field names or
+//! filenames (unsafe characters are rejected instead).
 
 use std::process;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -113,9 +115,10 @@ impl FormPartValue {
 /// caller `;type=` > captured `encoding.contentType` > inference from the
 /// part's schema kind > input-syntax default.
 ///
-/// When a matching `PartSpec` exists, its kind is authoritative for inference,
-/// so a documented text part stays untyped on the wire (servers read that as
-/// `text/plain`) even when the caller supplies a file path.
+/// When a matching `PartSpec` exists, its kind is authoritative for schema
+/// inference: a documented text part stays untyped on the wire even when the
+/// caller supplies a file path (servers read that as `text/plain`). The
+/// input-syntax default applies only to parts with no captured spec metadata.
 pub fn resolve_part_content_type(
     input_kind: PartKind,
     caller_content_type: Option<&str>,
@@ -260,9 +263,13 @@ fn validate_content_type(content_type: &str) -> Result<(), DomainError> {
     if content_type.is_empty() {
         return Err(form_error("content type after ';type=' must not be empty"));
     }
-    if content_type.contains('"') || content_type.contains('\r') || content_type.contains('\n') {
+    if content_type.contains('"')
+        || !content_type
+            .bytes()
+            .all(|byte| (0x20..=0x7e).contains(&byte))
+    {
         return Err(form_error(
-            "content type contains a quote or line break, which cannot be safely framed",
+            "content type contains a quote or non-printable characters, which cannot be safely framed",
         ));
     }
     Ok(())
@@ -429,6 +436,9 @@ mod tests {
             "photo=@/tmp/cat.png;type=",
             "photo=@/tmp/cat.png;type=a\"b",
             "photo=@/tmp/cat.png;type=a\rb",
+            "photo=@/tmp/cat.png;type=a\u{1}b",
+            "photo=@/tmp/cat.png;type=caf\u{e9}",
+            "photo=@/tmp/cat.png;type=a\tb",
         ] {
             let err = FormInput::parse(raw).unwrap_err();
             assert!(matches!(err, DomainError::Form { .. }), "{raw:?}: {err}");
@@ -492,7 +502,8 @@ mod tests {
                 None,
                 Some(&spec("name", PartKind::Text, None))
             ),
-            None
+            None,
+            "a documented text part stays untyped even for @path input"
         );
     }
 
@@ -524,7 +535,6 @@ mod tests {
     #[test]
     fn boundary_has_the_expected_shape_and_changes_per_call() {
         let first = boundary();
-        std::thread::sleep(std::time::Duration::from_millis(1));
         let second = boundary();
         assert!(first.starts_with("clining-"), "{first}");
         assert!(first.len() >= 24, "{first}");

@@ -195,6 +195,8 @@ impl MockServer {
                     (201, b"{\"id\":7}")
                 } else if request_line.starts_with("POST /uploads") {
                     (201, b"{\"uploadId\":9}")
+                } else if request_line.starts_with("PATCH /uploads/") {
+                    (200, b"{\"updated\":true}")
                 } else if request_line.starts_with("POST /store/orders") {
                     (200, b"{\"orderId\":1}")
                 } else {

@@ -344,7 +344,13 @@ fn malformed_form_part_is_a_single_line_error_without_a_request() {
     let base = server_base(&server);
     assert!(install_multipart(&dir, "uploads", &base).status.success());
 
-    for raw in ["name", "=value", "photo=@", "name=x;type=text/plain"] {
+    for raw in [
+        "name",
+        "=value",
+        "photo=@",
+        "name=x;type=text/plain",
+        "photo=@/tmp/x;type=caf\u{e9}",
+    ] {
         let invoke = run_cli(
             &dir,
             &["uploads", "uploads", "create-upload", "-F", raw],
@@ -411,5 +417,145 @@ fn form_parts_on_a_json_body_command_are_rejected_without_a_request() {
         invoke,
         "-F form parts support multipart/form-data commands only",
     );
+    server.handle.join().unwrap();
+}
+
+#[test]
+fn form_parts_with_piped_stdin_are_rejected_without_a_request() {
+    let dir = temp_dir("multipart-form-stdin-conflict");
+    let server = MockServer::start(0);
+    let base = server_base(&server);
+    assert!(install_multipart(&dir, "uploads", &base).status.success());
+
+    let invoke = run_cli(
+        &dir,
+        &["uploads", "uploads", "create-upload", "-F", "name=fluffy"],
+        Some(b"anything"),
+    );
+    assert_error(
+        invoke,
+        "cannot combine -F form parts with a piped stdin body",
+    );
+    server.handle.join().unwrap();
+}
+
+#[test]
+fn optional_multipart_body_without_parts_sends_no_body_or_content_type() {
+    let dir = temp_dir("multipart-optional");
+    let server = MockServer::start(1);
+    let base = server_base(&server);
+    assert!(install_multipart(&dir, "uploads", &base).status.success());
+
+    let invoke = run_cli(
+        &dir,
+        &["uploads", "uploads", "update-upload", "--upload-id", "7"],
+        None,
+    );
+    assert!(
+        invoke.status.success(),
+        "{}",
+        String::from_utf8_lossy(&invoke.stderr)
+    );
+    assert_eq!(invoke.stdout, b"{\"updated\":true}");
+
+    let request = server.request(0);
+    let (head, body) = split_request(&request);
+    assert!(
+        header_values(head, "content-type").is_empty(),
+        "{}",
+        request_text(head)
+    );
+    assert!(body.is_empty(), "{}", request_text(body));
+    server.handle.join().unwrap();
+}
+
+#[test]
+fn form_parts_on_a_bodyless_command_are_rejected_without_a_request() {
+    let dir = temp_dir("multipart-bodyless-rejected");
+    let server = MockServer::start(0);
+    let base = server_base(&server);
+    common::install(&dir, "pets", Some(&base));
+
+    let invoke = run_cli(
+        &dir,
+        &[
+            "pets",
+            "pets",
+            "get-pet",
+            "--pet-id",
+            "42",
+            "-F",
+            "name=fluffy",
+        ],
+        None,
+    );
+    assert_error(invoke, "declares no request body");
+    server.handle.join().unwrap();
+}
+
+#[test]
+fn documented_text_part_supplied_as_a_file_stays_untyped_on_the_wire() {
+    let dir = temp_dir("multipart-text-part-file");
+    let server = MockServer::start(1);
+    let base = server_base(&server);
+    assert!(install_multipart(&dir, "uploads", &base).status.success());
+    let data = upload_file(&dir);
+
+    let invoke = run_cli(
+        &dir,
+        &[
+            "uploads",
+            "uploads",
+            "create-upload",
+            "-F",
+            &format!("name=@{}", data.display()),
+        ],
+        None,
+    );
+    assert!(
+        invoke.status.success(),
+        "{}",
+        String::from_utf8_lossy(&invoke.stderr)
+    );
+
+    let request = server.request(0);
+    let (_, body) = split_request(&request);
+    let disposition = b"Content-Disposition: form-data; name=\"name\"; filename=\"cat.bin\"";
+    assert!(
+        body.windows(disposition.len())
+            .any(|window| window == disposition),
+        "{}",
+        request_text(body)
+    );
+    assert!(
+        !body
+            .windows(b"Content-Type:".len())
+            .any(|window| window == b"Content-Type:"),
+        "a documented text part stays untyped even for @path input: {}",
+        request_text(body)
+    );
+    server.handle.join().unwrap();
+}
+
+#[test]
+fn long_form_flag_on_a_non_multipart_command_is_a_body_error_not_a_usage_error() {
+    let dir = temp_dir("multipart-long-flag-non-multipart");
+    let server = MockServer::start(0);
+    let base = server_base(&server);
+    common::install(&dir, "pets", Some(&base));
+
+    let invoke = run_cli(
+        &dir,
+        &["pets", "pets", "create-pet", "--clining-form", "name=x"],
+        None,
+    );
+    assert_eq!(invoke.status.code(), Some(1));
+    assert!(invoke.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&invoke.stderr);
+    assert!(
+        stderr.contains("-F form parts support multipart/form-data commands only"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("unexpected argument"), "{stderr}");
     server.handle.join().unwrap();
 }

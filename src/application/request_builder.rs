@@ -29,6 +29,10 @@ pub fn build_request(
     form_parts: &[FormPart],
 ) -> Result<HttpRequest, DomainError> {
     let body = body.filter(|b| !b.is_empty());
+    validate_form_context(operation, custom_headers, !form_parts.is_empty())?;
+    if !form_parts.is_empty() && body.is_some() {
+        return Err(form_stdin_conflict_error(operation));
+    }
     let mut body = body.map(<[u8]>::to_vec);
     let url = build_url(base_url, operation, values)?;
     let custom_content_type = custom_headers
@@ -50,24 +54,13 @@ pub fn build_request(
         Some(spec) if is_multipart_form_data(&spec.content_type) => {
             if custom_content_type {
                 // The caller owns the body: stdin is sent raw with the manual
-                // Content-Type. Supplying parts too would be ambiguous.
-                if !form_parts.is_empty() {
-                    return Err(DomainError::Body {
-                        message: format!(
-                            "command '{}' cannot combine -F form parts with a custom Content-Type header (framing would be ambiguous)",
-                            operation.name
-                        ),
-                    });
-                }
-                if body.is_some() {
-                    headers.push(("Content-Type".to_owned(), spec.content_type.clone()));
-                } else if spec.required {
+                // Content-Type. `validate_form_context` already rejected parts.
+                if body.is_none() && spec.required {
                     return Err(multipart_required_error(operation));
                 }
             } else if !form_parts.is_empty() {
-                if body.is_some() {
-                    return Err(multipart_stdin_error(operation));
-                }
+                // `validate_form_context` rejected every other body source, so
+                // `body` is always None here.
                 let boundary = boundary();
                 let encoded = encode(&boundary, form_parts, spec.parts.as_deref().unwrap_or(&[]));
                 body = Some(encoded);
@@ -82,14 +75,7 @@ pub fn build_request(
             }
         }
         Some(spec) => {
-            if !form_parts.is_empty() {
-                return Err(DomainError::Body {
-                    message: format!(
-                        "command '{}' takes its body on stdin; -F form parts support multipart/form-data commands only",
-                        operation.name
-                    ),
-                });
-            }
+            // `validate_form_context` already rejected any form parts.
             if body.is_some() {
                 let content_type = if spec.content_type.is_empty() {
                     "application/json"
@@ -104,7 +90,8 @@ pub fn build_request(
             }
         }
         None => {
-            if body.is_some() || !form_parts.is_empty() {
+            // `validate_form_context` already rejected any form parts.
+            if body.is_some() {
                 return Err(DomainError::Body {
                     message: format!("command '{}' declares no request body", operation.name),
                 });
@@ -119,6 +106,57 @@ pub fn build_request(
         headers,
         body,
     })
+}
+
+/// Validates that `-F` form parts are usable with this operation, without
+/// reading any payload. The CLI calls this before materializing files or
+/// consuming stdin so unsupported invocations fail without I/O; the builder
+/// calls it again and remains the single source of truth for these errors.
+pub fn validate_form_context(
+    operation: &ApiOperation,
+    custom_headers: &[CustomHeader],
+    has_form_parts: bool,
+) -> Result<(), DomainError> {
+    if !has_form_parts {
+        return Ok(());
+    }
+    let Some(spec) = &operation.request_body else {
+        return Err(DomainError::Body {
+            message: format!("command '{}' declares no request body", operation.name),
+        });
+    };
+    if !is_multipart_form_data(&spec.content_type) {
+        return Err(DomainError::Body {
+            message: format!(
+                "command '{}' takes its body on stdin; -F form parts support multipart/form-data commands only",
+                operation.name
+            ),
+        });
+    }
+    if custom_headers
+        .iter()
+        .any(|header| header.name.eq_ignore_ascii_case("content-type"))
+    {
+        return Err(DomainError::Body {
+            message: format!(
+                "command '{}' cannot combine -F form parts with a custom Content-Type header (framing would be ambiguous)",
+                operation.name
+            ),
+        });
+    }
+    Ok(())
+}
+
+/// Error for `-F` parts combined with a piped stdin body. The two body sources
+/// are mutually exclusive, and stdin detection happens before form files are
+/// read so the conflict fails without unnecessary I/O.
+pub fn form_stdin_conflict_error(operation: &ApiOperation) -> DomainError {
+    DomainError::Body {
+        message: format!(
+            "command '{}' cannot combine -F form parts with a piped stdin body; use either -F parts or a raw body with -H Content-Type",
+            operation.name
+        ),
+    }
 }
 
 fn multipart_required_error(operation: &ApiOperation) -> DomainError {
@@ -996,7 +1034,7 @@ mod tests {
     }
 
     #[test]
-    fn form_parts_with_stdin_without_override_are_rejected() {
+    fn form_parts_with_stdin_are_rejected_as_a_conflict() {
         let operation = operation_with("/pets", vec![], vec![], Some(multipart_spec(true)));
         let err = build_request(
             "https://api.example.com",
@@ -1010,7 +1048,11 @@ mod tests {
         .unwrap_err();
         assert!(matches!(err, DomainError::Body { .. }), "{err}");
         assert!(err.to_string().contains("'test'"), "{err}");
-        assert!(err.to_string().contains("-F"), "{err}");
+        assert!(
+            err.to_string()
+                .contains("cannot combine -F form parts with a piped stdin body"),
+            "{err}"
+        );
     }
 
     #[test]

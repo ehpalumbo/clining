@@ -131,7 +131,7 @@ fn render_request_body(model: &ApiModel, body: &BodySpec, text: &mut String) {
     if multipart {
         let _ = writeln!(
             text,
-            "  Parts: -F '<field>=<value>' for text, -F '<field>=@<path>' for files (optional ';type=<content-type>')"
+            "  Parts: -F '<field>=<value>' for text, -F '<field>=@<path>' for files (optional ';type=<content-type>'; text values cannot start with '@')"
         );
         if let Some(parts) = &body.parts {
             for part in parts {

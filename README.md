@@ -95,9 +95,10 @@ clining uploads uploads create-upload \
 ```
 
 - `-F "<field>=<value>"` frames a text part; `-F "<field>=@<path>"` frames a file part with `filename` set to the basename of the path. File bytes are sent verbatim and files are read whole into memory.
-- An optional `;type=<content-type>` postfix on a file input overrides the per-part content type. Otherwise the type comes from the spec's `encoding.<field>.contentType` when documented, then from the schema (`format: binary` → `application/octet-stream`, objects → `application/json`), then from the input syntax.
+- An optional `;type=<content-type>` postfix on a file input overrides the per-part content type. Otherwise the type comes from the spec's `encoding.<field>.contentType` when documented, then from the schema (`format: binary` → `application/octet-stream`, objects → `application/json`), then — for parts the spec does not describe — from the input syntax. A part documented as a text string stays untyped even when supplied as `@path`, so servers read it as `text/plain`.
 - clining generates a fresh boundary per invocation and emits `Content-Type: multipart/form-data; boundary=<boundary>`. Parts are framed in input order; repeating a field name produces repeated parts.
-- Piping stdin to a multipart command with no custom `Content-Type` is rejected with a pointer to `-F`. To send a raw body instead, supply your own content type: `... -H "Content-Type: application/json" < body.json`. Combining `-F` with a custom `Content-Type` is rejected as ambiguous.
+- Piping stdin to a multipart command with no custom `Content-Type` is rejected with a pointer to `-F`. To send a raw body instead, supply your own content type: `... -H "Content-Type: application/json" < body.json`. Combining `-F` with a custom `Content-Type` is rejected as ambiguous, and combining `-F` with a piped stdin body is rejected with a dedicated conflict error before any form file is read.
+- A text value cannot start with `@` (it is always treated as a file path), and a file path cannot contain `;type=` (there is no escaping syntax).
 - Malformed parts, unreadable files, and unsafe field/filename characters fail with one `error:` line and exit `1` before any request is sent.
 - Presence-only validation still applies: spec-documented required parts are shown in `--help` but are not enforced. Models installed before multipart metadata was captured still accept `-F`; re-install to gain spec-derived per-part content types in help and on the wire.
 
